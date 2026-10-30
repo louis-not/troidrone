@@ -1,0 +1,6 @@
+.pio/
+.venv/
+data/
+secrets.ini
+__pycache__/
+*.pyc
