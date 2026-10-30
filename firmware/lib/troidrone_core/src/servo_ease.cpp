@@ -60,7 +60,9 @@ void ServoEase::update(float dt_s, FlightState state, float target_left_deg, flo
                 current_left_deg_ = step_towards(current_left_deg_, center_deg_, max_delta);
                 current_right_deg_ = step_towards(current_right_deg_, center_deg_, max_delta);
                 ramp_elapsed_s_ += dt_s;
-                if (ramp_elapsed_s_ >= ramp_duration_s_) {
+                if (ramp_elapsed_s_ >= ramp_duration_s_ &&
+                    std::fabs(current_left_deg_ - center_deg_) <= 0.01f &&
+                    std::fabs(current_right_deg_ - center_deg_) <= 0.01f) {
                     state_ = ServoEaseState::IDLE_LOW;
                     current_left_deg_ = center_deg_;
                     current_right_deg_ = center_deg_;
@@ -88,7 +90,9 @@ void ServoEase::update(float dt_s, FlightState state, float target_left_deg, flo
                 current_left_deg_ = step_towards(current_left_deg_, center_deg_, max_delta);
                 current_right_deg_ = step_towards(current_right_deg_, center_deg_, max_delta);
                 ramp_elapsed_s_ += dt_s;
-                if (ramp_elapsed_s_ >= ramp_duration_s_) {
+                if (ramp_elapsed_s_ >= ramp_duration_s_ &&
+                    std::fabs(current_left_deg_ - center_deg_) <= 0.01f &&
+                    std::fabs(current_right_deg_ - center_deg_) <= 0.01f) {
                     state_ = ServoEaseState::IDLE_LOW;
                     current_left_deg_ = center_deg_;
                     current_right_deg_ = center_deg_;
@@ -120,7 +124,9 @@ void ServoEase::update(float dt_s, FlightState state, float target_left_deg, flo
                 current_left_deg_ = step_towards(current_left_deg_, center_deg_, max_delta);
                 current_right_deg_ = step_towards(current_right_deg_, center_deg_, max_delta);
                 ramp_elapsed_s_ += dt_s;
-                if (ramp_elapsed_s_ >= ramp_duration_s_) {
+                if (ramp_elapsed_s_ >= ramp_duration_s_ &&
+                    std::fabs(current_left_deg_ - center_deg_) <= 0.01f &&
+                    std::fabs(current_right_deg_ - center_deg_) <= 0.01f) {
                     state_ = ServoEaseState::IDLE_LOW;
                     current_left_deg_ = center_deg_;
                     current_right_deg_ = center_deg_;

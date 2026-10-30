@@ -653,6 +653,112 @@ void test_servo_ease_micro_write_filter(void) {
     TEST_ASSERT_TRUE(should_write_servo(90.0f, 90.6f, 0.50f));
 }
 
+void test_servo_ease_disarm_ramp_safety_clamp(void) {
+    // Slew rate = 100 deg/s, ramp_duration = 0.20 s, center = 90 deg.
+    // In ramp_duration (0.20 s), at 100 deg/s max travel is only 20 deg.
+    ServoEase ease(100.0f, 0.20f, 90.0f);
+
+    float left = 0.0f;
+    float right = 0.0f;
+    bool pwm_active = false;
+
+    // Start in IDLE_LOW
+    ease.update(0.01f, FlightState::DISARMED, 90.0f, 90.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::IDLE_LOW, ease.state());
+    TEST_ASSERT_FALSE(pwm_active);
+
+    // Arm and advance to ACTIVE_PWM: target 150 deg left, 30 deg right (60 deg from center).
+    // Ramp duration = 0.20 s. Step 0.20 s in ARMED.
+    ease.update(0.20f, FlightState::ARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::ACTIVE_PWM, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 150.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 30.0f, right);
+
+    // Disarm trigger: enters DISARMING_RAMP
+    // Step 1: dt = 0.10 s. max_delta = 100 * 0.10 = 10 deg.
+    // Left: 150 -> 140, Right: 30 -> 40. ramp_elapsed = 0.10 s < 0.20 s.
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 140.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 40.0f, right);
+
+    // Step 2: dt = 0.10 s. ramp_elapsed = 0.20 s >= ramp_duration (0.20 s).
+    // max_delta = 10 deg. Left: 140 -> 130, Right: 40 -> 50.
+    // CRITICAL SAFETY CHECK:
+    // ramp_elapsed >= ramp_duration, but angles (130, 50) have NOT reached center (90).
+    // Must remain in DISARMING_RAMP and out_pwm_active MUST remain true!
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 130.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 50.0f, right);
+
+    // Step 3: dt = 0.10 s (elapsed 0.30 s). Left -> 120, Right -> 60. Still DISARMING_RAMP, PWM active.
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 120.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 60.0f, right);
+
+    // Step 4: dt = 0.10 s (elapsed 0.40 s). Left -> 110, Right -> 70. Still DISARMING_RAMP, PWM active.
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 110.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 70.0f, right);
+
+    // Step 5: dt = 0.10 s (elapsed 0.50 s). Left -> 100, Right -> 80. Still DISARMING_RAMP, PWM active.
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 80.0f, right);
+
+    // Step 6: dt = 0.10 s (elapsed 0.60 s). Left -> 90, Right -> 90.
+    // Both angles have now reached center (<= 0.01 deg delta) AND ramp_elapsed >= ramp_duration.
+    // Now transitions to IDLE_LOW and out_pwm_active turns false!
+    ease.update(0.10f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::IDLE_LOW, ease.state());
+    TEST_ASSERT_FALSE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, right);
+}
+
+void test_servo_ease_disarm_from_arming_ramp_safety_clamp(void) {
+    // Slew rate = 100 deg/s, ramp_duration = 0.20 s, center = 90 deg.
+    ServoEase ease(100.0f, 0.20f, 90.0f);
+
+    float left = 0.0f;
+    float right = 0.0f;
+    bool pwm_active = false;
+
+    // Step into ARMING_RAMP towards 150 / 30 for 0.10 s -> left = 100, right = 80
+    ease.update(0.10f, FlightState::ARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::ARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 80.0f, right);
+
+    // Disarm directly from ARMING_RAMP: transitions to DISARMING_RAMP
+    // Step 0.05 s: delta = 5 deg. Left: 100 -> 95, Right: 80 -> 85.
+    ease.update(0.05f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::DISARMING_RAMP, ease.state());
+    TEST_ASSERT_TRUE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 95.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 85.0f, right);
+
+    // Step 0.16 s: total ramp_elapsed = 0.21 s >= 0.20 s. max_delta = 16 deg.
+    // Left reaches 90.0, Right reaches 90.0.
+    // Angles reach center AND ramp_elapsed >= ramp_duration -> IDLE_LOW, PWM false.
+    ease.update(0.16f, FlightState::DISARMED, 150.0f, 30.0f, left, right, pwm_active);
+    TEST_ASSERT_EQUAL(ServoEaseState::IDLE_LOW, ease.state());
+    TEST_ASSERT_FALSE(pwm_active);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, left);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, right);
+}
+
 // ============================================================================
 // Unity Test Runner
 // ============================================================================
@@ -691,6 +797,8 @@ int run_unity_tests(void) {
     // ServoEase
     RUN_TEST(test_servo_ease_lifecycle_and_pwm_flag);
     RUN_TEST(test_servo_ease_micro_write_filter);
+    RUN_TEST(test_servo_ease_disarm_ramp_safety_clamp);
+    RUN_TEST(test_servo_ease_disarm_from_arming_ramp_safety_clamp);
 
     return UNITY_END();
 }
