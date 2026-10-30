@@ -1,0 +1,656 @@
+/* ==========================================================================
+   TROIDRONE MK-1 FLIGHT DECK CONTROLLER STYLES
+   Dark tactical flight instrumentation aesthetic with high-contrast readouts.
+   ========================================================================== */
+
+/* --- 1. Global Reset & Typography --- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #05080e;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  background: #05080e;
+  overflow: hidden;
+}
+
+/* --- 2. Flight Deck Viewport Container --- */
+.flight-deck {
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  background: #0b0f17;
+  color: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
+  box-shadow: 0 0 50px rgba(0, 0, 0, 0.85);
+}
+
+/* --- 3. Flight Deck Header --- */
+.flight-deck-header {
+  flex-shrink: 0;
+  padding: 14px 16px 12px;
+  background: #0d131f;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.deck-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drone-branding {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.radar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00f0ff;
+  box-shadow: 0 0 8px #00f0ff;
+  animation: radarPulse 2s infinite ease-in-out;
+  flex-shrink: 0;
+}
+
+.drone-callsign {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f8fafc;
+  text-transform: uppercase;
+}
+
+.tactical-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+/* --- State Badges --- */
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  min-height: 28px;
+  line-height: 1;
+  transition: all 0.2s ease;
+}
+
+.state-badge-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.state-badge-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+}
+
+.state-badge-label {
+  white-space: nowrap;
+}
+
+.state-badge--disconnected {
+  background: #141c28;
+  border-color: #243247;
+  color: #94a3b8;
+}
+
+.state-badge--proto-mismatch {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #f87171;
+}
+
+.state-badge--connecting {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
+}
+
+.state-badge--disarmed {
+  background: rgba(148, 163, 184, 0.15);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+}
+
+.state-badge--armed {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: #ef4444;
+  color: #fca5a5;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+}
+
+.state-badge--failsafe {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #f59e0b;
+  color: #fcd34d;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+}
+
+/* --- Telemetry Bar --- */
+.telemetry-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.telemetry-card {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.telemetry-card:has([data-warning="true"]) {
+  border-color: rgba(245, 158, 11, 0.6);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.telemetry-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.telemetry-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+.telemetry-value-wrap {
+  display: flex;
+  align-items: baseline;
+}
+
+.telemetry-val {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #f1f5f9;
+  letter-spacing: -0.01em;
+}
+
+.telemetry-val[data-warning="true"] {
+  color: #fbbf24;
+  text-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+/* --- 4. Throttle Deck & Controls --- */
+.throttle-deck {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 16px 8px;
+  gap: 12px;
+  position: relative;
+  width: 100%;
+}
+
+.throttle-stick {
+  flex: 1;
+  width: 100%;
+  max-width: 260px;
+  max-height: 380px;
+  min-height: 220px;
+  position: relative;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.throttle-stick:focus-visible {
+  outline: 2px solid #00f0ff;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.throttle-stick.throttle-stick--active {
+  cursor: grabbing;
+}
+
+/* Centered rail track */
+.stick-rail {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 0;
+  bottom: 0;
+  width: 72px;
+  background: #0e1623;
+  border: 1.5px solid #223249;
+  border-radius: 36px;
+  overflow: hidden;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+/* Throttle fill gradient */
+.stick-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 0%;
+  background: linear-gradient(to top, rgba(0, 229, 255, 0.25) 0%, rgba(0, 240, 255, 0.7) 100%);
+  border-top: 2px solid #00f0ff;
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.5);
+  pointer-events: none;
+}
+
+/* Scale marks on the left */
+.stick-scale {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 68px;
+  pointer-events: none;
+}
+
+.scale-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.scale-label {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: #94a3b8;
+}
+
+.scale-tick {
+  width: 10px;
+  height: 1.5px;
+  background: #3b506e;
+  border-radius: 1px;
+}
+
+/* Mark positions linearly aligned with thumb center */
+.scale-mark.mark-100 {
+  bottom: calc(100% - 26px);
+  transform: translateY(50%);
+}
+
+.scale-mark.mark-75 {
+  bottom: calc(75% - 13px);
+  transform: translateY(50%);
+}
+
+.scale-mark.mark-50 {
+  bottom: 50%;
+  transform: translateY(50%);
+}
+
+.scale-mark.mark-25 {
+  bottom: calc(25% + 13px);
+  transform: translateY(50%);
+}
+
+.scale-mark.mark-0 {
+  bottom: 26px;
+  transform: translateY(50%);
+}
+
+/* Readout card on the right */
+.stick-readout {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(13, 19, 31, 0.85);
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.readout-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.readout-val {
+  font-size: 26px;
+  font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: #00f0ff;
+  line-height: 1;
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.45);
+}
+
+/* Thumb Handle (Height 52px for mobile hit targets) */
+.throttle-thumb {
+  position: absolute;
+  left: calc(50% - 46px);
+  width: 92px;
+  height: 52px;
+  background: linear-gradient(180deg, #2b394e 0%, #172230 100%);
+  border: 2px solid #00f0ff;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.8), 0 0 12px rgba(0, 240, 255, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  z-index: 10;
+  cursor: grab;
+}
+
+.throttle-stick--active .throttle-thumb {
+  border-color: #38bdf8;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.9), 0 0 22px rgba(0, 240, 255, 0.65);
+  cursor: grabbing;
+}
+
+.thumb-grip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.grip-line {
+  width: 28px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 1px;
+}
+
+.thumb-indicator {
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 7px solid #00f0ff;
+  pointer-events: none;
+  filter: drop-shadow(-1px 0 3px rgba(0, 240, 255, 0.6));
+}
+
+/* Safety dead-man switch advisory */
+.safety-advisory {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fcd34d;
+  width: 100%;
+  max-width: 320px;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.advisory-icon {
+  color: #f59e0b;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.advisory-text {
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+/* --- 5. Flight Deck Footer & Arm Button --- */
+.flight-deck-footer {
+  flex-shrink: 0;
+  padding: 12px 16px 16px;
+  background: #0d131f;
+  border-top: 1px solid #1e293b;
+  display: flex;
+}
+
+.arm-button {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+  border: 2px solid transparent;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+  touch-action: manipulation;
+}
+
+.arm-button:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 3px;
+}
+
+.arm-btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.arm-btn-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+}
+
+.arm-btn-label {
+  line-height: 1;
+}
+
+/* Arm button states */
+.arm-button--disconnected {
+  background: #141c28;
+  border-color: #243247;
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.arm-button--lockout {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: #d97706;
+  color: #fbbf24;
+  cursor: not-allowed;
+  opacity: 0.95;
+}
+
+.arm-button--arm {
+  background: linear-gradient(180deg, #065f46 0%, #044e39 100%);
+  border-color: #10b981;
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.arm-button--arm:hover:not(:disabled) {
+  background: linear-gradient(180deg, #059669 0%, #065f46 100%);
+  box-shadow: 0 0 22px rgba(16, 185, 129, 0.6);
+}
+
+.arm-button--arm:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.arm-button--armed {
+  background: linear-gradient(180deg, #b91c1c 0%, #991b1b 100%);
+  border-color: #ef4444;
+  color: #ffffff;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  animation: pulseArmed 1.8s infinite ease-in-out;
+}
+
+.arm-button--armed:hover:not(:disabled) {
+  background: linear-gradient(180deg, #dc2626 0%, #b91c1c 100%);
+}
+
+.arm-button--armed:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.arm-button--failsafe {
+  background: linear-gradient(180deg, #92400e 0%, #78350f 100%);
+  border-color: #f59e0b;
+  color: #ffffff;
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  animation: pulseFailsafe 1.4s infinite ease-in-out;
+}
+
+.arm-button--failsafe:hover:not(:disabled) {
+  background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
+}
+
+.arm-button--failsafe:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+/* --- 6. Tactical Animations --- */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes radarPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes pulseArmed {
+  0%, 100% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(239, 68, 68, 0.85);
+  }
+}
+
+@keyframes pulseFailsafe {
+  0%, 100% {
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 26px rgba(245, 158, 11, 0.85);
+  }
+}
