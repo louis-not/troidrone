@@ -17,7 +17,7 @@ const ui = createFlightDeckUI({
     controllerStore.setThrottleInput(val);
   },
   onThrottleReset: (): void => {
-    controllerStore.resetThrottleInput();
+    link.flushZeroThrottle();
   },
   onArmAction: (arm: boolean): void => {
     link.sendArm(arm);

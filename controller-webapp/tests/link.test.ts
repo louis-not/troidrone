@@ -278,6 +278,52 @@ describe('ControllerLink', () => {
       link.destroy();
     });
 
+    it('transmits a ctl frame with thr: 0 immediately before sending the arm { v: true } frame', () => {
+      const link = new ControllerLink({
+        store,
+        webSocketFactory: mockFactory,
+        autoConnect: true,
+      });
+
+      const socket = createdSockets[0];
+      socket.triggerOpen();
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+
+      // Drone is connected, initial ctl(0) was sent
+      expect(socket.sent.length).toBe(1);
+
+      // Pilot sets non-zero throttle input
+      store.setThrottleInput(0.75);
+      expect(store.getState().throttleInput).toBe(0.75);
+
+      // Arm drone
+      const armed = link.sendArm(true);
+      expect(armed).toBe(true);
+
+      // Verify two additional frames were sent: pre-arm ctl(0) followed immediately by arm(true)
+      expect(socket.sent.length).toBe(3);
+
+      const preArmCtl = JSON.parse(socket.sent[1]);
+      const armFrame = JSON.parse(socket.sent[2]);
+
+      expect(preArmCtl).toMatchObject({
+        t: 'ctl',
+        thr: 0,
+        str: 0,
+      });
+      expect(preArmCtl.seq).toBeDefined();
+
+      expect(armFrame).toEqual({
+        t: 'arm',
+        v: true,
+      });
+
+      // Verify store throttle input was reset to 0
+      expect(store.getState().throttleInput).toBe(0);
+
+      link.destroy();
+    });
+
     it('rejects arming when not connected', () => {
       const link = new ControllerLink({
         store,
@@ -287,6 +333,75 @@ describe('ControllerLink', () => {
 
       expect(link.sendArm(true)).toBe(false);
       expect(link.sendArm(false)).toBe(false);
+
+      link.destroy();
+    });
+  });
+
+  describe('flushZeroThrottle', () => {
+    it('immediately transmits ctl frame with thr: 0 over WebSocket without waiting for the 40ms interval timer', () => {
+      const link = new ControllerLink({
+        store,
+        webSocketFactory: mockFactory,
+        autoConnect: true,
+        ctlIntervalMs: 40,
+      });
+
+      const socket = createdSockets[0];
+      socket.triggerOpen();
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+
+      // Socket has sent initial ctl(0)
+      expect(socket.sent.length).toBe(1);
+
+      // Pilot increases throttle to 0.8
+      store.setThrottleInput(0.8);
+      expect(store.getState().throttleInput).toBe(0.8);
+
+      // Advance only 15 ms (less than the 40 ms interval tick)
+      vi.advanceTimersByTime(15);
+      // No periodic ctl sent yet
+      expect(socket.sent.length).toBe(1);
+
+      // Pilot releases stick triggering flushZeroThrottle
+      link.flushZeroThrottle();
+
+      // Store throttle must be reset to 0 immediately
+      expect(store.getState().throttleInput).toBe(0);
+
+      // ctl frame with thr: 0 is transmitted immediately without waiting for the remaining 25 ms
+      expect(socket.sent.length).toBe(2);
+      const flushedCtl = JSON.parse(socket.sent[1]);
+      expect(flushedCtl).toMatchObject({
+        t: 'ctl',
+        thr: 0,
+        str: 0,
+      });
+
+      // When the 40ms interval timer fires, it sends another ctl frame with thr: 0
+      vi.advanceTimersByTime(25);
+      expect(socket.sent.length).toBe(3);
+      const periodicCtl = JSON.parse(socket.sent[2]);
+      expect(periodicCtl.thr).toBe(0);
+      expect(periodicCtl.seq).toBe((flushedCtl.seq + 1) >>> 0);
+
+      link.destroy();
+    });
+
+    it('resets store throttle input when disconnected without sending frames', () => {
+      const link = new ControllerLink({
+        store,
+        webSocketFactory: mockFactory,
+        autoConnect: false,
+      });
+
+      store.setThrottleInput(0.5);
+      expect(store.getState().throttleInput).toBe(0.5);
+
+      link.flushZeroThrottle();
+
+      expect(store.getState().throttleInput).toBe(0);
+      expect(createdSockets.length).toBe(0);
 
       link.destroy();
     });

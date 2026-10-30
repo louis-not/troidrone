@@ -205,13 +205,19 @@ export class ControllerLink {
     }
   }
 
+  public flushZeroThrottle(): void {
+    this.store.resetThrottleInput();
+    if (this.isConnected()) {
+      this.sendCtl(0);
+    }
+  }
+
   public sendArm(v: boolean): boolean {
-    if (
-      this.store.getState().connState === 'CONNECTED' &&
-      this.ws !== null &&
-      this.ws.readyState === 1
-    ) {
+    if (this.isConnected()) {
       this.store.resetThrottleInput();
+      if (v === true) {
+        this.sendCtl(0);
+      }
       const frame: ArmFrame = { t: 'arm', v };
       return this.sendRaw(serializeClientFrame(frame));
     }
