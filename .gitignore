@@ -1,0 +1,16 @@
+# Root ignores across submodules
+.DS_Store
+*.log
+
+# Firmware ignores
+firmware/.pio/
+firmware/.venv/
+firmware/data/
+firmware/secrets.ini
+
+# Webapp ignores
+controller-webapp/node_modules/
+controller-webapp/dist/
+controller-webapp/test-results/
+controller-webapp/playwright-report/
+controller-webapp/.vite/
