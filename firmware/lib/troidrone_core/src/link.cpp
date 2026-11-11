@@ -11,8 +11,24 @@ bool WsControlSource::accept_ctl(uint32_t seq, float thr, float str, uint32_t no
         return true;
     }
 
-    int32_t diff = static_cast<int32_t>(seq - last_seq_);
-    if (diff > 0) {
+    if (is_seq_newer(seq, last_seq_)) {
+        last_seq_ = seq;
+        return true;
+    }
+
+    return false;
+}
+
+bool WsControlSource::accept_stop(uint32_t seq, uint32_t now_ms) {
+    (void)now_ms;
+
+    if (!has_seq_) {
+        has_seq_ = true;
+        last_seq_ = seq;
+        return true;
+    }
+
+    if (is_seq_newer(seq, last_seq_)) {
         last_seq_ = seq;
         return true;
     }

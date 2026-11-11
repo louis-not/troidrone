@@ -14,7 +14,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 #endif
 
 #ifndef WIFI_SSID_PREFIX
@@ -35,6 +35,7 @@ struct NetManager::Impl {
     char ssid[32] = {0};
 
     FlightFsm* fsm = nullptr;
+    BatteryMonitor* battery = nullptr;
     const float* current_freq_hz = nullptr;
     std::mutex* state_mutex = nullptr;
     uint32_t last_telemetry_ms = 0;
@@ -126,14 +127,36 @@ void NetManager::Impl::on_ws_event(AsyncWebSocket* /*server*/, AsyncWebSocketCli
                                 }
                             }
                         }
-                    } else if (ft == FrameType::ARM) {
-                        ArmFrame arm;
-                        if (parse_arm(payload, len, arm)) {
+                    } else if (ft == FrameType::STOP) {
+                        StopFrame stop_frame;
+                        if (parse_stop(payload, len, stop_frame)) {
                             if (state_mutex != nullptr && fsm != nullptr) {
                                 std::lock_guard<std::mutex> lock(*state_mutex);
                                 if (cid == active_client_id) {
                                     uint32_t now = millis();
-                                    fsm->on_arm(now, arm.v);
+                                    if (ws_control_source.accept_stop(stop_frame.seq, now)) {
+                                        fsm->on_stop(now, stop_frame.seq);
+                                    }
+                                }
+                            }
+                        }
+                    } else if (ft == FrameType::ARM) {
+                        ArmFrame arm;
+                        if (parse_arm(payload, len, arm)) {
+                            ArmResult result{false, ArmRefusal::NONE};
+                            if (state_mutex != nullptr && fsm != nullptr) {
+                                std::lock_guard<std::mutex> lock(*state_mutex);
+                                if (cid == active_client_id) {
+                                    uint32_t now = millis();
+                                    bool batt_ok = (battery != nullptr) ? battery->is_ok() : true;
+                                    result = fsm->on_arm_result(now, arm.v, batt_ok);
+                                }
+                            }
+                            if (arm.v && !result.success) {
+                                char err_buf[80];
+                                size_t err_len = serialize_err(err_buf, sizeof(err_buf), "arm_refused", FlightFsm::to_refusal_str(result.reason));
+                                if (err_len > 0) {
+                                    client->text(err_buf, err_len);
                                 }
                             }
                         }
@@ -157,6 +180,9 @@ void NetManager::Impl::send_telemetry(uint32_t now_ms) {
     char st[16] = {0};
     float freq = 0.0f;
     float thr = 0.0f;
+    float str = 0.0f;
+    float vb = 0.0f;
+    int vpct = 0;
     uint32_t age = 9999;
 
     if (state_mutex != nullptr && fsm != nullptr && current_freq_hz != nullptr) {
@@ -168,13 +194,18 @@ void NetManager::Impl::send_telemetry(uint32_t now_ms) {
         std::strncpy(st, fsm->state_str(), sizeof(st) - 1);
         freq = *current_freq_hz;
         thr = fsm->effective_thr();
+        str = (fsm->state() == FlightState::ARMED) ? fsm->last_steering() : 0.0f;
+        if (battery != nullptr) {
+            vb = battery->voltage();
+            vpct = battery->percentage();
+        }
         age = fsm->age_ms(now_ms);
     } else {
         return;
     }
 
-    char tel_buf[96];
-    size_t len = serialize_tel(tel_buf, sizeof(tel_buf), st, freq, thr, age);
+    char tel_buf[128];
+    size_t len = serialize_tel(tel_buf, sizeof(tel_buf), st, freq, thr, str, vb, vpct, age);
     if (len > 0) {
         ws.text(client_id, tel_buf, len);
     }
@@ -197,83 +228,66 @@ const char* NetManager::ssid() const {
     return pimpl_->ssid;
 }
 
-bool NetManager::begin(FlightFsm& fsm, const float& current_freq_hz, std::mutex& state_mutex) {
+bool NetManager::begin(FlightFsm& fsm, BatteryMonitor& battery, const float& current_freq_hz, std::mutex& state_mutex) {
     pimpl_->fsm = &fsm;
+    pimpl_->battery = &battery;
     pimpl_->current_freq_hz = &current_freq_hz;
     pimpl_->state_mutex = &state_mutex;
+    pimpl_->last_telemetry_ms = 0;
 
 #if defined(ARDUINO)
-    // 1. Mount LittleFS
-    if (!LittleFS.begin(true)) {
-        Serial.println("[FS] ERROR: LittleFS mount failed");
-    } else {
-        Serial.println("[FS] LittleFS mounted");
-    }
-
-    // 2. Wi-Fi AP configuration
-    WiFi.mode(WIFI_AP);
-
-    uint8_t mac[6];
+    uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    static const char hex_digits[] = "0123456789ABCDEF";
-    size_t plen = std::strlen(WIFI_SSID_PREFIX);
-    if (plen + 6 < sizeof(pimpl_->ssid)) {
-        std::memcpy(pimpl_->ssid, WIFI_SSID_PREFIX, plen);
-        pimpl_->ssid[plen] = '-';
-        pimpl_->ssid[plen + 1] = hex_digits[(mac[4] >> 4) & 0x0F];
-        pimpl_->ssid[plen + 2] = hex_digits[mac[4] & 0x0F];
-        pimpl_->ssid[plen + 3] = hex_digits[(mac[5] >> 4) & 0x0F];
-        pimpl_->ssid[plen + 4] = hex_digits[mac[5] & 0x0F];
-        pimpl_->ssid[plen + 5] = '\0';
+    std::snprintf(pimpl_->ssid, sizeof(pimpl_->ssid), "%s-%02X%02X",
+                  WIFI_SSID_PREFIX, mac[4], mac[5]);
+
+    WiFi.mode(WIFI_AP);
+    IPAddress ap_ip(192, 168, 4, 1);
+    IPAddress ap_gateway(192, 168, 4, 1);
+    IPAddress ap_subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet);
+
+    bool ap_ok = WiFi.softAP(pimpl_->ssid, WIFI_AP_PASSWORD, 1, 0, 4);
+    if (!ap_ok) {
+        Serial.println("[NET] ERROR: Failed to start Wi-Fi SoftAP");
+        return false;
     }
 
-    IPAddress ap_ip(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
-    IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(ap_ip, gateway, subnet);
-    WiFi.softAP(pimpl_->ssid, WIFI_AP_PASSWORD);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
-    // 3. mDNS responder: MDNS.begin("troidrone")
     if (MDNS.begin("troidrone")) {
-        Serial.println("[MDNS] Responder started: http://troidrone.local");
-    } else {
-        Serial.println("[MDNS] ERROR: Failed to start responder");
+        MDNS.addService("http", "tcp", 80);
     }
 
-    // 4. WebSocket /ws setup
-    pimpl_->ws.onEvent([](AsyncWebSocket* s, AsyncWebSocketClient* c,
-                          AwsEventType t, void* a, uint8_t* d, size_t l) {
-        s_impl.on_ws_event(s, c, t, a, d, l);
+    if (!LittleFS.begin(false)) {
+        Serial.println("[NET] WARNING: LittleFS mount failed (files will not be served)");
+    } else {
+        pimpl_->server.serveStatic("/", LittleFS, "/")
+            .setDefaultFile("index.html")
+            .setCacheControl("max-age=600");
+    }
+
+    pimpl_->ws.onEvent([this](AsyncWebSocket* s, AsyncWebSocketClient* c,
+                             AwsEventType t, void* a, uint8_t* d, size_t l) {
+        pimpl_->on_ws_event(s, c, t, a, d, l);
     });
     pimpl_->server.addHandler(&pimpl_->ws);
 
-    // 5. Static file handler (serve LittleFS with index.html default and gzip-first)
-    pimpl_->server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setTryGzipFirst(true);
-
-    // 6. 404 handler fallback
-    pimpl_->server.onNotFound([](AsyncWebServerRequest* request) {
-        request->send(404);
-    });
-
-    // 7. Start web server
     pimpl_->server.begin();
-    Serial.print("[NET] AP SSID: ");
-    Serial.print(pimpl_->ssid);
-    Serial.println(", IP: 192.168.4.1");
-#endif
-
     return true;
+#else
+    std::strncpy(pimpl_->ssid, "troidrone-native", sizeof(pimpl_->ssid) - 1);
+    return true;
+#endif
 }
 
 void NetManager::update() {
 #if defined(ARDUINO)
     uint32_t now = millis();
-    // 5 Hz telemetry loop (every 200 ms)
+    pimpl_->ws.cleanupClients();
     if (now - pimpl_->last_telemetry_ms >= 200u) {
         pimpl_->last_telemetry_ms = now;
         pimpl_->send_telemetry(now);
     }
-    pimpl_->ws.cleanupClients();
 #endif
 }

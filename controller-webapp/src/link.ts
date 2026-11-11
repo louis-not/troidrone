@@ -6,6 +6,7 @@
 import {
   type ArmFrame,
   type CtlFrame,
+  type StopFrame,
   type DeviceFrame,
   clamp,
   parseDeviceFrame,
@@ -266,17 +267,19 @@ export class ControllerLink {
 
   private handleDeviceFrame(frame: DeviceFrame): void {
     if (frame.t === 'hello') {
-      if (frame.proto !== 1) {
+      if (frame.proto !== 2) {
         this.store.setHello(frame.proto, frame.fw);
         this.store.resetThrottleInput();
+        this.store.resetSteerInput();
         this.stopSendLoop();
         return;
       }
 
       this.store.setHello(frame.proto, frame.fw);
       this.store.resetThrottleInput();
+      this.store.resetSteerInput();
       this.currentBackoffMs = this.minReconnectDelayMs;
-      this.sendCtl(0);
+      this.sendCtl(0, 0);
       this.startSendLoop();
       return;
     }
@@ -285,16 +288,34 @@ export class ControllerLink {
       this.store.setTelemetry(frame);
       return;
     }
+
+    if (frame.t === 'err') {
+      this.store.setError(frame.code, frame.msg);
+      return;
+    }
   }
 
-  private sendCtl(thr: number): void {
+  public sendStop(): boolean {
     const currentSeq = this.seq;
     this.seq = (this.seq + 1) >>> 0;
+    const frame: StopFrame = {
+      t: 'stop',
+      seq: currentSeq,
+    };
+    return this.sendRaw(serializeClientFrame(frame));
+  }
+
+  public sendCtl(thr?: number, str?: number): void {
+    const currentSeq = this.seq;
+    this.seq = (this.seq + 1) >>> 0;
+    const state = this.store.getState();
+    const effectiveThr = thr !== undefined ? thr : state.throttleInput;
+    const effectiveStr = str !== undefined ? str : state.steerInput;
     const frame: CtlFrame = {
       t: 'ctl',
       seq: currentSeq,
-      thr: clamp(thr, 0.0, 1.0),
-      str: 0.0,
+      thr: clamp(effectiveThr, 0.0, 1.0),
+      str: clamp(effectiveStr, -1.0, 1.0),
     };
     this.sendRaw(serializeClientFrame(frame));
   }
@@ -380,12 +401,13 @@ export class ControllerLink {
 
   private triggerSafetyDisarm(): void {
     this.store.resetThrottleInput();
+    this.store.resetSteerInput();
     if (
       this.store.getState().connState === 'CONNECTED' &&
       this.ws !== null &&
       this.ws.readyState === 1
     ) {
-      this.sendCtl(0);
+      this.sendStop();
       this.sendArm(false);
     }
   }

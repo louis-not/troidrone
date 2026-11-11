@@ -30,6 +30,21 @@ class TestClient {
     });
   }
 
+  public async nextMessageMatching<T = unknown>(predicate: (msg: unknown) => boolean, timeoutMs = 2000): Promise<T> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const idx = this.queue.findIndex(predicate);
+      if (idx !== -1) {
+        return this.queue.splice(idx, 1)[0] as T;
+      }
+      const msg = await this.nextMessage();
+      if (predicate(msg)) {
+        return msg as T;
+      }
+    }
+    throw new Error('Timeout waiting for matching message');
+  }
+
   public send(msg: unknown): void {
     this.ws.send(JSON.stringify(msg));
   }
@@ -95,22 +110,22 @@ describe('MockEspServer', () => {
       const hello = await client.nextMessage<{ t: string; proto: number; fw: string }>();
       expect(hello).toEqual({
         t: 'hello',
-        proto: 1,
-        fw: '0.1.0-mock',
+        proto: 2,
+        fw: '0.2.0-mock',
       });
     });
 
     it('supports custom proto version in options', async () => {
       await server.stop();
-      server = createMockEspServer({ proto: 2, fw: '0.2.0-custom' });
+      server = createMockEspServer({ proto: 99, fw: '99.0.0-custom' });
       await server.start(0);
 
       const client = await createClient(server.getWsUrl());
       const hello = await client.nextMessage<{ t: string; proto: number; fw: string }>();
       expect(hello).toEqual({
         t: 'hello',
-        proto: 2,
-        fw: '0.2.0-custom',
+        proto: 99,
+        fw: '99.0.0-custom',
       });
     });
 
@@ -396,6 +411,75 @@ describe('MockEspServer', () => {
       client.send({ t: 'arm', v: true });
       await sleep(20);
       expect(server.getState().st).toBe('ARMED');
+    });
+  });
+
+  describe('MVP 2 Stop Frame, Release Lock, and Battery Cutoff', () => {
+    it('stop frame sets throttle to 0 and engages 250ms release lock rejecting non-idle throttle', async () => {
+      await server.start(0);
+      const client = await createClient(server.getWsUrl());
+      await client.nextMessage();
+
+      // Arm first
+      client.send({ t: 'ctl', seq: 10, thr: 0.0, str: 0.0 });
+      client.send({ t: 'arm', v: true });
+      await sleep(20);
+      expect(server.getState().st).toBe('ARMED');
+
+      // Pilot applies throttle
+      client.send({ t: 'ctl', seq: 11, thr: 0.8, str: 0.2 });
+      await sleep(20);
+      expect(server.getState().thr).toBe(0.8);
+
+      // Pilot releases stick -> sends stop
+      client.send({ t: 'stop', seq: 12 });
+      await sleep(20);
+      expect(server.getState().thr).toBe(0.0);
+      expect(server.getState().releaseLockActive).toBe(true);
+
+      // Immediately send ctl with non-idle throttle while in release lock -> rejected (clamped to 0)
+      client.send({ t: 'ctl', seq: 13, thr: 0.5, str: 0.0 });
+      await sleep(20);
+      expect(server.getState().thr).toBe(0.0);
+
+      // Wait out the 250ms release lock
+      await sleep(260);
+      expect(server.getState().releaseLockActive).toBe(false);
+
+      // Subsequent ctl with throttle is now accepted
+      client.send({ t: 'ctl', seq: 14, thr: 0.5, str: 0.0 });
+      await sleep(20);
+      expect(server.getState().thr).toBe(0.5);
+    });
+
+    it('battery cutoff endpoint triggers LOWBATT latch and refuses arming', async () => {
+      await server.start(0);
+      const client = await createClient(server.getWsUrl());
+      await client.nextMessage();
+
+      // Inject low battery voltage < 6.4V
+      const resp = await fetch(`http://127.0.0.1:${server.getPort()}/__mock/vbat?v=6.3`, {
+        method: 'POST',
+      });
+      expect(resp.status).toBe(200);
+
+      // Wait > 2.0s for cutoff latch
+      await sleep(2100);
+      expect(server.getState().st).toBe('LOWBATT');
+
+      // Attempting to arm returns err frame with arm_refused
+      client.send({ t: 'ctl', seq: 20, thr: 0.0, str: 0.0 });
+      client.send({ t: 'arm', v: true });
+
+      const err = await client.nextMessageMatching<{ t: string; code: string; msg: string }>(
+        (m) => (m as { t?: string }).t === 'err' && (m as { code?: string }).code === 'arm_refused'
+      );
+      expect(err).toEqual({
+        t: 'err',
+        code: 'arm_refused',
+        msg: 'batt',
+      });
+      expect(server.getState().st).toBe('LOWBATT');
     });
   });
 });

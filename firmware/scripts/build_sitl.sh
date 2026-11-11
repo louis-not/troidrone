@@ -13,6 +13,7 @@ g++ -std=c++17 -Wall -Wextra -pthread -O2 \
   -I"${FIRMWARE_DIR}/.pio/libdeps/native/ArduinoJson/src" \
   "${FIRMWARE_DIR}/lib/troidrone_core/src/flap_engine.cpp" \
   "${FIRMWARE_DIR}/lib/troidrone_core/src/flight_fsm.cpp" \
+  "${FIRMWARE_DIR}/lib/troidrone_core/src/battery.cpp" \
   "${FIRMWARE_DIR}/lib/troidrone_core/src/protocol_codec.cpp" \
   "${FIRMWARE_DIR}/lib/troidrone_core/src/link.cpp" \
   "${FIRMWARE_DIR}/lib/troidrone_core/src/servo_ease.cpp" \

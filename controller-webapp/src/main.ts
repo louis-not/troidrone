@@ -16,6 +16,13 @@ const ui = createFlightDeckUI({
   onThrottleChange: (val: number): void => {
     controllerStore.setThrottleInput(val);
   },
+  onSteerChange: (val: number): void => {
+    controllerStore.setSteerInput(val);
+  },
+  onStickRelease: (): void => {
+    link.sendStop();
+    link.flushZeroThrottle();
+  },
   onThrottleReset: (): void => {
     link.flushZeroThrottle();
   },

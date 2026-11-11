@@ -1,17 +1,22 @@
 /**
- * Troidrone Protocol — Contract C1 (proto: 1, MVP 1)
+ * Troidrone Protocol — Contract C1 (proto: 2, MVP 2)
  *
  * Types, runtime validators, and serialization for communication between
  * controller-webapp and drone firmware.
  */
 
-export type FlightState = 'DISARMED' | 'ARMED' | 'FAILSAFE';
+export type FlightState = 'DISARMED' | 'ARMED' | 'FAILSAFE' | 'LOWBATT';
 
 export interface CtlFrame {
   t: 'ctl';
   seq: number;
   thr: number;
   str?: number;
+}
+
+export interface StopFrame {
+  t: 'stop';
+  seq: number;
 }
 
 export interface ArmFrame {
@@ -30,11 +35,20 @@ export interface TelFrame {
   st: FlightState;
   f: number;
   thr: number;
+  str?: number;
+  vb?: number;
+  vpct?: number;
   age: number;
 }
 
-export type ClientFrame = CtlFrame | ArmFrame;
-export type DeviceFrame = HelloFrame | TelFrame;
+export interface ErrFrame {
+  t: 'err';
+  code: string;
+  msg: string;
+}
+
+export type ClientFrame = CtlFrame | ArmFrame | StopFrame;
+export type DeviceFrame = HelloFrame | TelFrame | ErrFrame;
 
 /**
  * Clamps a number between min and max. If val is NaN, returns min.
@@ -88,14 +102,32 @@ export function isTelFrame(obj: unknown): obj is TelFrame {
   const record = obj as Record<string, unknown>;
   return (
     record.t === 'tel' &&
-    (record.st === 'DISARMED' || record.st === 'ARMED' || record.st === 'FAILSAFE') &&
+    (record.st === 'DISARMED' ||
+      record.st === 'ARMED' ||
+      record.st === 'FAILSAFE' ||
+      record.st === 'LOWBATT') &&
     typeof record.f === 'number' &&
     Number.isFinite(record.f) &&
     typeof record.thr === 'number' &&
     Number.isFinite(record.thr) &&
+    (record.str === undefined || (typeof record.str === 'number' && Number.isFinite(record.str))) &&
+    (record.vb === undefined || (typeof record.vb === 'number' && Number.isFinite(record.vb))) &&
+    (record.vpct === undefined || (typeof record.vpct === 'number' && Number.isFinite(record.vpct))) &&
     typeof record.age === 'number' &&
     Number.isInteger(record.age) &&
     record.age >= 0
+  );
+}
+
+export function isErrFrame(obj: unknown): obj is ErrFrame {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+    return false;
+  }
+  const record = obj as Record<string, unknown>;
+  return (
+    record.t === 'err' &&
+    typeof record.code === 'string' &&
+    typeof record.msg === 'string'
   );
 }
 
@@ -116,6 +148,20 @@ export function isCtlFrame(obj: unknown): obj is CtlFrame {
   );
 }
 
+export function isStopFrame(obj: unknown): obj is StopFrame {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+    return false;
+  }
+  const record = obj as Record<string, unknown>;
+  return (
+    record.t === 'stop' &&
+    typeof record.seq === 'number' &&
+    Number.isInteger(record.seq) &&
+    record.seq >= 0 &&
+    record.seq <= 0xffffffff
+  );
+}
+
 export function isArmFrame(obj: unknown): obj is ArmFrame {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
     return false;
@@ -125,11 +171,11 @@ export function isArmFrame(obj: unknown): obj is ArmFrame {
 }
 
 export function isClientFrame(obj: unknown): obj is ClientFrame {
-  return isCtlFrame(obj) || isArmFrame(obj);
+  return isCtlFrame(obj) || isArmFrame(obj) || isStopFrame(obj);
 }
 
 export function isDeviceFrame(obj: unknown): obj is DeviceFrame {
-  return isHelloFrame(obj) || isTelFrame(obj);
+  return isHelloFrame(obj) || isTelFrame(obj) || isErrFrame(obj);
 }
 
 /**
@@ -169,7 +215,10 @@ export function parseDeviceFrame(data: unknown): DeviceFrame | null {
 
   if (record.t === 'tel') {
     if (
-      (record.st === 'DISARMED' || record.st === 'ARMED' || record.st === 'FAILSAFE') &&
+      (record.st === 'DISARMED' ||
+        record.st === 'ARMED' ||
+        record.st === 'FAILSAFE' ||
+        record.st === 'LOWBATT') &&
       typeof record.f === 'number' &&
       Number.isFinite(record.f) &&
       typeof record.thr === 'number' &&
@@ -178,12 +227,33 @@ export function parseDeviceFrame(data: unknown): DeviceFrame | null {
       Number.isInteger(record.age) &&
       record.age >= 0
     ) {
-      return {
+      const tel: TelFrame = {
         t: 'tel',
         st: record.st,
         f: record.f,
         thr: record.thr,
         age: record.age,
+      };
+      if (typeof record.str === 'number' && Number.isFinite(record.str)) {
+        tel.str = record.str;
+      }
+      if (typeof record.vb === 'number' && Number.isFinite(record.vb)) {
+        tel.vb = record.vb;
+      }
+      if (typeof record.vpct === 'number' && Number.isFinite(record.vpct)) {
+        tel.vpct = record.vpct;
+      }
+      return tel;
+    }
+    return null;
+  }
+
+  if (record.t === 'err') {
+    if (typeof record.code === 'string' && typeof record.msg === 'string') {
+      return {
+        t: 'err',
+        code: record.code,
+        msg: record.msg,
       };
     }
     return null;
@@ -204,6 +274,14 @@ export function serializeClientFrame(frame: ClientFrame): string {
       seq: toUint32(frame.seq),
       thr: clamp(frame.thr, 0.0, 1.0),
       str: clamp(rawStr, -1.0, 1.0),
+    };
+    return JSON.stringify(clean);
+  }
+
+  if (frame.t === 'stop') {
+    const clean: StopFrame = {
+      t: 'stop',
+      seq: toUint32(frame.seq),
     };
     return JSON.stringify(clean);
   }

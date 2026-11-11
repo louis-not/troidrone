@@ -134,7 +134,7 @@ describe('ControllerLink', () => {
   });
 
   describe('Hello frame handling & 25 Hz send loop', () => {
-    it('proto === 1 starts 25 Hz ctl send loop and sends initial ctl(0)', () => {
+    it('proto === 2 starts 25 Hz ctl send loop and sends initial ctl(0)', () => {
       const link = new ControllerLink({
         store,
         webSocketFactory: mockFactory,
@@ -145,12 +145,12 @@ describe('ControllerLink', () => {
       const socket = createdSockets[0];
       socket.triggerOpen();
 
-      // Drone sends hello with proto 1
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      // Drone sends hello with proto 2
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Store transitions to CONNECTED
       expect(store.getState().connState).toBe('CONNECTED');
-      expect(store.getState().fw).toBe('0.1.0');
+      expect(store.getState().fw).toBe('0.2.0');
       expect(link.isConnected()).toBe(true);
 
       // Immediately sends initial ctl frame with thr: 0
@@ -176,7 +176,7 @@ describe('ControllerLink', () => {
       link.destroy();
     });
 
-    it('proto === 2 transitions to PROTO_MISMATCH and never sends ctl or arm', () => {
+    it('incompatible proto transitions to PROTO_MISMATCH and never sends ctl or arm', () => {
       const link = new ControllerLink({
         store,
         webSocketFactory: mockFactory,
@@ -187,10 +187,10 @@ describe('ControllerLink', () => {
       socket.triggerOpen();
 
       // Drone sends hello with incompatible protocol version
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 99, fw: '99.0.0' }));
 
       expect(store.getState().connState).toBe('PROTO_MISMATCH');
-      expect(store.getState().fw).toBe('0.2.0');
+      expect(store.getState().fw).toBe('99.0.0');
       expect(link.isConnected()).toBe(false);
 
       // No ctl frames should be sent
@@ -226,7 +226,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Advance by 5 intervals (200 ms) -> 1 initial + 5 periodic = 6 frames
       vi.advanceTimersByTime(200);
@@ -251,7 +251,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Set throttle input
       store.setThrottleInput(0.6);
@@ -287,7 +287,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Drone is connected, initial ctl(0) was sent
       expect(socket.sent.length).toBe(1);
@@ -349,7 +349,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Socket has sent initial ctl(0)
       expect(socket.sent.length).toBe(1);
@@ -417,7 +417,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       socket.triggerMessage(
         JSON.stringify({ t: 'tel', st: 'ARMED', f: 2.5, thr: 0.525, age: 18 })
@@ -442,7 +442,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       // Buffer
       const telJson = JSON.stringify({ t: 'tel', st: 'FAILSAFE', f: 0, thr: 0, age: 501 });
@@ -513,7 +513,7 @@ describe('ControllerLink', () => {
 
       // Success resets backoff
       createdSockets[5].triggerOpen();
-      createdSockets[5].triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      createdSockets[5].triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
       createdSockets[5].triggerClose();
 
       // Backoff is reset to 250 ms
@@ -583,7 +583,7 @@ describe('ControllerLink', () => {
 
       const socket = createdSockets[0];
       socket.triggerOpen();
-      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 1, fw: '0.1.0' }));
+      socket.triggerMessage(JSON.stringify({ t: 'hello', proto: 2, fw: '0.2.0' }));
 
       store.setThrottleInput(0.9);
 
@@ -595,9 +595,9 @@ describe('ControllerLink', () => {
       // Throttle is reset
       expect(store.getState().throttleInput).toBe(0);
 
-      // Sent ctl(0) and arm(false)
+      // Sent stop and arm(false)
       const lastTwo = socket.sent.slice(-2).map((s) => JSON.parse(s));
-      expect(lastTwo[0]).toMatchObject({ t: 'ctl', thr: 0 });
+      expect(lastTwo[0]).toMatchObject({ t: 'stop' });
       expect(lastTwo[1]).toMatchObject({ t: 'arm', v: false });
 
       link.destroy();

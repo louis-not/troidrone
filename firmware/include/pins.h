@@ -8,34 +8,35 @@
     #include <Arduino.h>
 #else
     // Fallback pin definitions for native/unit testing environment where Arduino headers are not available.
+    // XIAO ESP32-S3 pin mapping:
     #ifndef D0
-    inline constexpr uint8_t D0 = 2;
+    inline constexpr uint8_t D0 = 1;
     #endif
     #ifndef D1
-    inline constexpr uint8_t D1 = 3;
+    inline constexpr uint8_t D1 = 2;
     #endif
     #ifndef D2
-    inline constexpr uint8_t D2 = 4;
+    inline constexpr uint8_t D2 = 3;
     #endif
     #ifndef D3
-    inline constexpr uint8_t D3 = 5;
+    inline constexpr uint8_t D3 = 4;
     #endif
     #ifndef D6
-    inline constexpr uint8_t D6 = 20;
+    inline constexpr uint8_t D6 = 43;
     #endif
     #ifndef D8
-    inline constexpr uint8_t D8 = 8;
+    inline constexpr uint8_t D8 = 7;
     #endif
     #ifndef D9
-    inline constexpr uint8_t D9 = 9;
+    inline constexpr uint8_t D9 = 8;
     #endif
     #ifndef D10
-    inline constexpr uint8_t D10 = 10;
+    inline constexpr uint8_t D10 = 9;
     #endif
 #endif
 
 // ============================================================================
-// Contract C2: Hardware Pinout & Peripherals for Seeed Studio XIAO ESP32-C3
+// Contract C2 v2: Hardware Pinout & Peripherals for Seeed Studio XIAO ESP32-S3
 // ============================================================================
 
 // Servos (Elevons)
@@ -69,7 +70,9 @@ inline constexpr uint8_t PIN_LED_LOWBATT = D8;
 // DO NOT touch or reassign D9/D10 for general GPIO or other peripherals.
 
 // Servo PWM Constants
+#ifndef SERVO_FREQ_HZ
 inline constexpr uint32_t SERVO_FREQ_HZ = 50;
+#endif
 inline constexpr uint32_t SERVO_MIN_US = 500;
 inline constexpr uint32_t SERVO_MAX_US = 2400;
 inline constexpr uint32_t SERVO_NEUTRAL_US = 1450;

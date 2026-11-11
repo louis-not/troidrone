@@ -367,20 +367,20 @@ test.describe.serial('C++ SITL E2E Spec', () => {
     await expect
       .poll(
         async () => {
-          const txt = await secondArmButton.textContent();
+          const txt = (await secondArmButton.textContent())?.trim();
           return txt === 'RESET FAILSAFE' || txt === 'ARM DRONE';
         },
         { timeout: 5000, intervals: [50, 100] }
       )
       .toBe(true);
 
-    if ((await secondArmButton.textContent()) === 'RESET FAILSAFE') {
+    if ((await secondArmButton.textContent())?.trim() === 'RESET FAILSAFE') {
       await secondArmButton.click();
       await expect(secondBadge).toHaveText('DISARMED', { timeout: 3000 });
       await expect(secondArmButton).toHaveText('ARM DRONE');
     }
 
-    if ((await secondArmButton.textContent()) === 'ARM DRONE') {
+    if ((await secondArmButton.textContent())?.trim() === 'ARM DRONE') {
       await secondArmButton.click();
       await expect(secondBadge).toHaveText('ARMED', { timeout: 3000 });
       await expect(secondArmButton).toHaveText('DISARM DRONE');

@@ -9,6 +9,8 @@ describe('ControllerStore', () => {
       fw: null,
       telemetry: null,
       throttleInput: 0,
+      steerInput: 0,
+      lastError: null,
     });
     expect(store.getState()).toEqual(INITIAL_STATE);
   });
@@ -16,9 +18,11 @@ describe('ControllerStore', () => {
   it('allows initializing with custom initial state', () => {
     const custom: ControllerState = {
       connState: 'CONNECTED',
-      fw: '0.1.0',
+      fw: '0.2.0',
       telemetry: { st: 'ARMED', f: 2.0, thr: 0.5, age: 20 },
       throttleInput: 0.5,
+      steerInput: 0.2,
+      lastError: null,
     };
     const store = createStore(custom);
     expect(store.getState()).toEqual(custom);
@@ -55,31 +59,33 @@ describe('ControllerStore', () => {
   });
 
   describe('setHello', () => {
-    it('sets connState to CONNECTED and records fw when proto === 1', () => {
+    it('sets connState to CONNECTED and records fw when proto === 2', () => {
       const store = createStore();
       const listener = vi.fn();
       store.subscribe(listener);
 
       store.setThrottleInput(0.8);
+      store.setSteerInput(0.5);
       listener.mockClear();
 
-      store.setHello(1, '0.1.0-esp32');
+      store.setHello(2, '0.2.0-esp32');
       const state = store.getState();
       expect(state.connState).toBe('CONNECTED');
-      expect(state.fw).toBe('0.1.0-esp32');
+      expect(state.fw).toBe('0.2.0-esp32');
       expect(state.throttleInput).toBe(0); // Safety: throttle must be reset
+      expect(state.steerInput).toBe(0);
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
-    it('sets connState to PROTO_MISMATCH when proto !== 1', () => {
+    it('sets connState to PROTO_MISMATCH when proto !== 2', () => {
       const store = createStore();
       const listener = vi.fn();
       store.subscribe(listener);
 
-      store.setHello(2, '0.2.0');
+      store.setHello(1, '0.1.0');
       const state = store.getState();
       expect(state.connState).toBe('PROTO_MISMATCH');
-      expect(state.fw).toBe('0.2.0');
+      expect(state.fw).toBe('0.1.0');
       expect(state.throttleInput).toBe(0);
       expect(listener).toHaveBeenCalledTimes(1);
     });

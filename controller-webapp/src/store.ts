@@ -1,12 +1,18 @@
 /**
  * Controller WebApp reactive store.
- * Manages connection state, drone firmware info, telemetry, and pilot throttle input.
+ * Manages connection state, drone firmware info, telemetry, pilot inputs, and errors.
  */
 
-import { clamp, type FlightState } from './protocol';
+import { clamp, type FlightState, type TelFrame } from './protocol';
 
 export type ConnState = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'PROTO_MISMATCH';
 export type { FlightState };
+
+export interface ErrorInfo {
+  code: string;
+  msg: string;
+  timestamp: number;
+}
 
 export interface ControllerState {
   connState: ConnState;
@@ -15,9 +21,14 @@ export interface ControllerState {
     st: FlightState;
     f: number;
     thr: number;
+    str?: number;
+    vb?: number;
+    vpct?: number;
     age: number;
   } | null;
   throttleInput: number; // 0.0 .. 1.0
+  steerInput: number; // -1.0 .. 1.0
+  lastError: ErrorInfo | null;
 }
 
 export interface ControllerStore {
@@ -25,9 +36,13 @@ export interface ControllerStore {
   subscribe(listener: (state: ControllerState) => void): () => void;
   setConnState(connState: ConnState): void;
   setHello(proto: number, fw: string): void;
-  setTelemetry(tel: { st: FlightState; f: number; thr: number; age: number }): void;
+  setTelemetry(tel: TelFrame | { st: FlightState; f: number; thr: number; str?: number; vb?: number; vpct?: number; age: number }): void;
   setThrottleInput(val: number): void;
   resetThrottleInput(): void;
+  setSteerInput(val: number): void;
+  resetSteerInput(): void;
+  setError(code: string, msg: string): void;
+  clearError(): void;
   reset(): void;
 }
 
@@ -36,6 +51,8 @@ export const INITIAL_STATE: Readonly<ControllerState> = Object.freeze({
   fw: null,
   telemetry: null,
   throttleInput: 0,
+  steerInput: 0,
+  lastError: null,
 });
 
 export function createStore(initialState: ControllerState = INITIAL_STATE): ControllerStore {
@@ -72,23 +89,27 @@ export function createStore(initialState: ControllerState = INITIAL_STATE): Cont
     },
 
     setHello(proto: number, fw: string): void {
-      const connState: ConnState = proto === 1 ? 'CONNECTED' : 'PROTO_MISMATCH';
+      const connState: ConnState = proto === 2 ? 'CONNECTED' : 'PROTO_MISMATCH';
       state = {
         ...state,
         fw,
         connState,
         throttleInput: 0,
+        steerInput: 0,
       };
       notify();
     },
 
-    setTelemetry(tel: { st: FlightState; f: number; thr: number; age: number }): void {
+    setTelemetry(tel: TelFrame | { st: FlightState; f: number; thr: number; str?: number; vb?: number; vpct?: number; age: number }): void {
       state = {
         ...state,
         telemetry: {
           st: tel.st,
           f: tel.f,
           thr: tel.thr,
+          str: tel.str,
+          vb: tel.vb,
+          vpct: tel.vpct,
           age: tel.age,
         },
       };
@@ -105,6 +126,37 @@ export function createStore(initialState: ControllerState = INITIAL_STATE): Cont
     resetThrottleInput(): void {
       if (state.throttleInput === 0) return;
       state = { ...state, throttleInput: 0 };
+      notify();
+    },
+
+    setSteerInput(val: number): void {
+      const clamped = clamp(val, -1.0, 1.0);
+      if (state.steerInput === clamped) return;
+      state = { ...state, steerInput: clamped };
+      notify();
+    },
+
+    resetSteerInput(): void {
+      if (state.steerInput === 0) return;
+      state = { ...state, steerInput: 0 };
+      notify();
+    },
+
+    setError(code: string, msg: string): void {
+      state = {
+        ...state,
+        lastError: {
+          code,
+          msg,
+          timestamp: Date.now(),
+        },
+      };
+      notify();
+    },
+
+    clearError(): void {
+      if (state.lastError === null) return;
+      state = { ...state, lastError: null };
       notify();
     },
 

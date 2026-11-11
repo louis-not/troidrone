@@ -22,6 +22,12 @@ FrameType identify_frame(const char* json_str, size_t len) {
     if (std::strcmp(t, "arm") == 0) {
         return FrameType::ARM;
     }
+    if (std::strcmp(t, "stop") == 0) {
+        return FrameType::STOP;
+    }
+    if (std::strcmp(t, "err") == 0) {
+        return FrameType::ERR;
+    }
     if (std::strcmp(t, "hello") == 0) {
         return FrameType::HELLO;
     }
@@ -41,7 +47,6 @@ bool parse_ctl(const char* json_str, size_t len, CtlFrame& out) {
         return false;
     }
 
-    // "t" must be "ctl"
     if (!doc["t"].is<const char*>()) {
         return false;
     }
@@ -49,12 +54,10 @@ bool parse_ctl(const char* json_str, size_t len, CtlFrame& out) {
         return false;
     }
 
-    // "seq" must be unsigned 32-bit integer (reject bools or floats)
     if (!doc["seq"].is<uint32_t>() || doc["seq"].is<bool>()) {
         return false;
     }
 
-    // "thr" must be finite float, clamped to [0.0f, 1.0f]
     if (!doc["thr"].is<float>() || doc["thr"].is<bool>()) {
         return false;
     }
@@ -63,7 +66,6 @@ bool parse_ctl(const char* json_str, size_t len, CtlFrame& out) {
         return false;
     }
 
-    // "str" optional float (default 0.0f), clamped to [-1.0f, 1.0f]
     float raw_str = 0.0f;
     if (!doc["str"].isNull()) {
         if (!doc["str"].is<float>() || doc["str"].is<bool>()) {
@@ -91,7 +93,6 @@ bool parse_arm(const char* json_str, size_t len, ArmFrame& out) {
         return false;
     }
 
-    // "t" must be "arm"
     if (!doc["t"].is<const char*>()) {
         return false;
     }
@@ -99,12 +100,68 @@ bool parse_arm(const char* json_str, size_t len, ArmFrame& out) {
         return false;
     }
 
-    // "v" must be boolean
     if (!doc["v"].is<bool>()) {
         return false;
     }
 
     out.v = doc["v"].as<bool>();
+    return true;
+}
+
+bool parse_stop(const char* json_str, size_t len, StopFrame& out) {
+    if (!json_str || len == 0) {
+        return false;
+    }
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json_str, len);
+    if (err || !doc.is<JsonObject>()) {
+        return false;
+    }
+
+    if (!doc["t"].is<const char*>()) {
+        return false;
+    }
+    if (std::strcmp(doc["t"].as<const char*>(), "stop") != 0) {
+        return false;
+    }
+
+    if (!doc["seq"].is<uint32_t>() || doc["seq"].is<bool>()) {
+        return false;
+    }
+
+    out.seq = doc["seq"].as<uint32_t>();
+    return true;
+}
+
+bool parse_err(const char* json_str, size_t len, ErrFrame& out) {
+    if (!json_str || len == 0) {
+        return false;
+    }
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json_str, len);
+    if (err || !doc.is<JsonObject>()) {
+        return false;
+    }
+
+    if (!doc["t"].is<const char*>()) {
+        return false;
+    }
+    if (std::strcmp(doc["t"].as<const char*>(), "err") != 0) {
+        return false;
+    }
+
+    if (!doc["code"].is<const char*>()) {
+        return false;
+    }
+    std::strncpy(out.code, doc["code"].as<const char*>(), sizeof(out.code) - 1);
+    out.code[sizeof(out.code) - 1] = '\0';
+
+    if (doc["msg"].is<const char*>()) {
+        std::strncpy(out.msg, doc["msg"].as<const char*>(), sizeof(out.msg) - 1);
+        out.msg[sizeof(out.msg) - 1] = '\0';
+    } else {
+        out.msg[0] = '\0';
+    }
     return true;
 }
 
@@ -165,6 +222,21 @@ bool parse_tel(const char* json_str, size_t len, TelFrame& out) {
     out.f = doc["f"].as<float>();
     out.thr = doc["thr"].as<float>();
     out.age = doc["age"].as<uint32_t>();
+
+    // Optional v2 fields
+    out.str = 0.0f;
+    if (doc["str"].is<float>() && !doc["str"].is<bool>()) {
+        out.str = doc["str"].as<float>();
+    }
+    out.vb = 0.0f;
+    if (doc["vb"].is<float>() && !doc["vb"].is<bool>()) {
+        out.vb = doc["vb"].as<float>();
+    }
+    out.vpct = 0;
+    if (doc["vpct"].is<int>() && !doc["vpct"].is<bool>()) {
+        out.vpct = doc["vpct"].as<int>();
+    }
+
     return true;
 }
 
@@ -174,12 +246,12 @@ size_t serialize_hello(char* buf, size_t buf_size, const char* fw_version) {
     }
     JsonDocument doc;
     doc["t"] = "hello";
-    doc["proto"] = 1;
-    doc["fw"] = (fw_version != nullptr) ? fw_version : "0.1.0";
+    doc["proto"] = 2;
+    doc["fw"] = (fw_version != nullptr) ? fw_version : "0.2.0";
     return serializeJson(doc, buf, buf_size);
 }
 
-size_t serialize_tel(char* buf, size_t buf_size, const char* st, float f, float thr, uint32_t age) {
+size_t serialize_tel(char* buf, size_t buf_size, const char* st, float f, float thr, float str, float vb, int vpct, uint32_t age) {
     if (!buf || buf_size == 0) {
         return 0;
     }
@@ -188,6 +260,24 @@ size_t serialize_tel(char* buf, size_t buf_size, const char* st, float f, float 
     doc["st"] = (st != nullptr) ? st : "";
     doc["f"] = f;
     doc["thr"] = thr;
+    doc["str"] = str;
+    doc["vb"] = vb;
+    doc["vpct"] = vpct;
     doc["age"] = age;
+    return serializeJson(doc, buf, buf_size);
+}
+
+size_t serialize_tel(char* buf, size_t buf_size, const char* st, float f, float thr, uint32_t age) {
+    return serialize_tel(buf, buf_size, st, f, thr, 0.0f, 0.0f, 0, age);
+}
+
+size_t serialize_err(char* buf, size_t buf_size, const char* code, const char* msg) {
+    if (!buf || buf_size == 0) {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["t"] = "err";
+    doc["code"] = (code != nullptr) ? code : "";
+    doc["msg"] = (msg != nullptr) ? msg : "";
     return serializeJson(doc, buf, buf_size);
 }

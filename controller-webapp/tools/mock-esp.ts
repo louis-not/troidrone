@@ -1,5 +1,5 @@
 /**
- * Mock ESP32 WebSocket Server — Contract C1 (proto: 1, MVP 1)
+ * Mock ESP32 WebSocket Server — Contract C1 (proto: 2, MVP 2)
  *
  * Implements ESP32 drone WebSocket protocol semantics for local development,
  * integration testing, and fault simulation.
@@ -14,29 +14,60 @@ import {
   clamp,
   isArmFrame,
   isCtlFrame,
+  isStopFrame,
   isSeqNewer,
   type FlightState,
   type HelloFrame,
   type TelFrame,
+  type ErrFrame,
 } from '../src/protocol';
 
 export interface MockEspOptions {
   port?: number;
   proto?: number;
   fw?: string;
+  initialVbat?: number;
 }
 
 export interface MockEspState {
   st: FlightState;
   f: number;
   thr: number;
+  str: number;
+  vb: number;
+  vpct: number;
   age: number;
   lastSeq: number | null;
   activeClients: number;
+  releaseLockActive: boolean;
+}
+
+function round2(val: number): number {
+  return Math.round(val * 100) / 100 + 0;
 }
 
 function round3(val: number): number {
   return Math.round(val * 1000) / 1000 + 0;
+}
+
+const LIPO_TABLE_V = [3.30, 3.60, 3.70, 3.75, 3.80, 3.85, 3.90, 3.95, 4.00, 4.05, 4.10, 4.15, 4.20];
+const PCT_TABLE = [0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 1.00];
+
+export function voltageToPercentage(packV: number, cellCount = 2): number {
+  if (cellCount <= 0) return 0;
+  const perCell = packV / cellCount;
+  if (perCell <= LIPO_TABLE_V[0]) return 0;
+  if (perCell >= LIPO_TABLE_V[LIPO_TABLE_V.length - 1]) return 100;
+
+  for (let i = 1; i < LIPO_TABLE_V.length; ++i) {
+    if (perCell <= LIPO_TABLE_V[i]) {
+      const span = LIPO_TABLE_V[i] - LIPO_TABLE_V[i - 1];
+      const pos = (perCell - LIPO_TABLE_V[i - 1]) / span;
+      const pct = PCT_TABLE[i - 1] + pos * (PCT_TABLE[i] - PCT_TABLE[i - 1]);
+      return Math.round(pct * 100);
+    }
+  }
+  return 100;
 }
 
 export class MockEspServer {
@@ -50,6 +81,12 @@ export class MockEspServer {
   private rawStr = 0.0;
   private lastSeq: number | null = null;
   private lastCtlMs: number | null = null;
+  private releaseLockUntilMs = 0;
+
+  // Battery simulation
+  private filteredVbat: number;
+  private cutoffTimerMs = 0;
+  private cutoffLatched = false;
 
   private dropControlFrames = false;
 
@@ -58,15 +95,27 @@ export class MockEspServer {
   private activeSocket: WebSocket | null = null;
 
   private telemetryTimer: ReturnType<typeof setInterval> | null = null;
-  private failsafeTimer: ReturnType<typeof setInterval> | null = null;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: MockEspOptions = {}) {
     this.options = options;
-    this.protoVersion = options.proto ?? 1;
-    this.fwVersion = options.fw ?? '0.1.0-mock';
+    this.protoVersion = options.proto ?? 2;
+    this.fwVersion = options.fw ?? '0.2.0-mock';
+    this.filteredVbat = options.initialVbat ?? 7.82;
     if (options.port !== undefined) {
       this.port = options.port;
     }
+  }
+
+  public setVbat(volts: number): void {
+    const riseAlpha = 0.12;
+    const fallAlpha = 0.025;
+    const alpha = volts > this.filteredVbat ? riseAlpha : fallAlpha;
+    this.filteredVbat = this.filteredVbat + alpha * (volts - this.filteredVbat);
+  }
+
+  public setVbatDirect(volts: number): void {
+    this.filteredVbat = volts;
   }
 
   public async start(port?: number): Promise<number> {
@@ -77,7 +126,33 @@ export class MockEspServer {
     const listenPort = port !== undefined ? port : (this.options.port ?? 8080);
 
     const httpServer = http.createServer((req, res) => {
-      void req;
+      const url = new URL(req.url ?? '', `http://${req.headers.host ?? '127.0.0.1'}`);
+
+      // Battery injection endpoint: /__mock/vbat or /__sitl/vbat
+      if (url.pathname === '/__mock/vbat' || url.pathname === '/__sitl/vbat') {
+        const vParam = url.searchParams.get('v');
+        if (vParam !== null) {
+          const v = parseFloat(vParam);
+          if (Number.isFinite(v)) {
+            // Direct injection for test simulation
+            this.setVbatDirect(v);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, vb: round2(this.filteredVbat), vpct: this.getBatteryPct() }));
+            return;
+          }
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing or invalid v parameter' }));
+        return;
+      }
+
+      // State inspector endpoint
+      if (url.pathname === '/__mock/state' || url.pathname === '/__sitl/state') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(this.getState()));
+        return;
+      }
+
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not Found');
     });
@@ -168,6 +243,9 @@ export class MockEspServer {
     this.lastCtlMs = null;
     this.rawThr = 0.0;
     this.rawStr = 0.0;
+    this.releaseLockUntilMs = 0;
+    this.cutoffTimerMs = 0;
+    this.cutoffLatched = false;
     this.dropControlFrames = false;
   }
 
@@ -187,9 +265,13 @@ export class MockEspServer {
       st: this.state,
       f: this.getFlapFrequency(),
       thr: this.getEffectiveThrottle(),
+      str: this.getEffectiveSteer(),
+      vb: round2(this.filteredVbat),
+      vpct: this.getBatteryPct(),
       age: this.getAge(),
       lastSeq: this.lastSeq,
       activeClients: this.activeSocket && this.activeSocket.readyState === WebSocket.OPEN ? 1 : 0,
+      releaseLockActive: Date.now() < this.releaseLockUntilMs,
     };
   }
 
@@ -221,7 +303,6 @@ export class MockEspServer {
   }
 
   private handleNewConnection(ws: WebSocket): void {
-    // Newest connection wins: close prior active socket with 4001 ("superseded")
     if (this.activeSocket) {
       const prior = this.activeSocket;
       this.activeSocket = null;
@@ -241,7 +322,6 @@ export class MockEspServer {
     this.rawThr = 0.0;
     this.rawStr = 0.0;
 
-    // Send immediate hello frame on connect
     const hello: HelloFrame = {
       t: 'hello',
       proto: this.protoVersion,
@@ -275,6 +355,21 @@ export class MockEspServer {
     ws.on('error', onDisconnect);
   }
 
+  private sendErr(code: string, msg: string): void {
+    if (this.activeSocket && this.activeSocket.readyState === WebSocket.OPEN) {
+      const errFrame: ErrFrame = {
+        t: 'err',
+        code,
+        msg,
+      };
+      try {
+        this.activeSocket.send(JSON.stringify(errFrame));
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   private handleMessage(ws: WebSocket, data: unknown): void {
     if (this.activeSocket !== ws) {
       return;
@@ -306,9 +401,29 @@ export class MockEspServer {
       }
       this.lastSeq = parsed.seq;
       this.lastCtlMs = Date.now();
-      this.rawThr = clamp(parsed.thr, 0.0, 1.0);
+
+      // Check 250ms release lock
+      const inReleaseLock = Date.now() < this.releaseLockUntilMs;
+      if (inReleaseLock && parsed.thr > 0.05) {
+        this.rawThr = 0.0;
+      } else {
+        this.rawThr = clamp(parsed.thr, 0.0, 1.0);
+      }
       this.rawStr = parsed.str !== undefined ? clamp(parsed.str, -1.0, 1.0) : 0.0;
-      void this.rawStr;
+      return;
+    }
+
+    if (record.t === 'stop') {
+      if (!isStopFrame(parsed)) {
+        return;
+      }
+      if (this.lastSeq !== null && !isSeqNewer(parsed.seq, this.lastSeq)) {
+        return;
+      }
+      this.lastSeq = parsed.seq;
+      this.rawThr = 0.0;
+      this.releaseLockUntilMs = Date.now() + 250;
+      // CRUCIAL: stop frame does NOT update this.lastCtlMs
       return;
     }
 
@@ -317,12 +432,24 @@ export class MockEspServer {
         return;
       }
       if (parsed.v === true) {
-        if (this.state === 'DISARMED') {
-          const age = this.getAge();
-          if (this.lastCtlMs !== null && age <= 500 && this.rawThr < 0.05) {
-            this.state = 'ARMED';
-          }
+        if (this.cutoffLatched) {
+          this.sendErr('arm_refused', 'batt');
+          return;
         }
+        if (this.state !== 'DISARMED') {
+          this.sendErr('arm_refused', 'state');
+          return;
+        }
+        const age = this.getAge();
+        if (this.lastCtlMs === null || age > 500) {
+          this.sendErr('arm_refused', 'link');
+          return;
+        }
+        if (this.rawThr >= 0.05) {
+          this.sendErr('arm_refused', 'thr');
+          return;
+        }
+        this.state = 'ARMED';
       } else {
         // parsed.v === false
         if (this.state === 'ARMED' || this.state === 'FAILSAFE') {
@@ -340,6 +467,10 @@ export class MockEspServer {
     return Math.max(0, Math.floor(Date.now() - this.lastCtlMs));
   }
 
+  private getBatteryPct(): number {
+    return voltageToPercentage(this.filteredVbat);
+  }
+
   private getFlapFrequency(): number {
     if (this.state === 'ARMED' && this.rawThr > 0.05) {
       return round3(1.0 + ((this.rawThr - 0.05) / 0.95) * 3.0);
@@ -354,11 +485,31 @@ export class MockEspServer {
     return 0.0;
   }
 
-  private checkFailsafe(): void {
+  private getEffectiveSteer(): number {
+    if (this.state === 'ARMED') {
+      return round3(this.rawStr);
+    }
+    return 0.0;
+  }
+
+  private checkBatteryAndFailsafe(dtMs: number): void {
+    // Battery cutoff check
+    if (this.filteredVbat < 6.40) {
+      this.cutoffTimerMs += dtMs;
+      if (this.cutoffTimerMs >= 2000 && !this.cutoffLatched) {
+        this.cutoffLatched = true;
+        this.state = 'LOWBATT';
+        this.sendErr('lowbatt', 'voltage_cutoff');
+      }
+    } else {
+      this.cutoffTimerMs = 0;
+    }
+
     if (this.state === 'ARMED') {
       const age = this.getAge();
       if (age > 500) {
         this.state = 'FAILSAFE';
+        this.sendErr('failsafe_link', 'timeout');
       }
     }
   }
@@ -370,6 +521,9 @@ export class MockEspServer {
         st: this.state,
         f: this.getFlapFrequency(),
         thr: this.getEffectiveThrottle(),
+        str: this.getEffectiveSteer(),
+        vb: round2(this.filteredVbat),
+        vpct: this.getBatteryPct(),
         age: this.getAge(),
       };
       try {
@@ -385,9 +539,11 @@ export class MockEspServer {
     this.telemetryTimer = setInterval(() => {
       this.broadcastTelemetry();
     }, 200);
-    this.failsafeTimer = setInterval(() => {
-      this.checkFailsafe();
-    }, 25);
+
+    const dtMs = 25;
+    this.tickTimer = setInterval(() => {
+      this.checkBatteryAndFailsafe(dtMs);
+    }, dtMs);
   }
 
   private clearTimers(): void {
@@ -395,9 +551,9 @@ export class MockEspServer {
       clearInterval(this.telemetryTimer);
       this.telemetryTimer = null;
     }
-    if (this.failsafeTimer !== null) {
-      clearInterval(this.failsafeTimer);
-      this.failsafeTimer = null;
+    if (this.tickTimer !== null) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
     }
   }
 }

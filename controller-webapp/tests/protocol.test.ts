@@ -270,6 +270,37 @@ describe('Protocol — serializeClientFrame', () => {
     expect(JSON.parse(coerced)).toEqual({ t: 'arm', v: true });
   });
 
+  it('serializes stop frames and coerces sequence to uint32', () => {
+    const stopFrame = serializeClientFrame({ t: 'stop', seq: 1730208042 });
+    expect(JSON.parse(stopFrame)).toEqual({ t: 'stop', seq: 1730208042 });
+
+    const wrappedStop = serializeClientFrame({ t: 'stop', seq: -1 });
+    expect(JSON.parse(wrappedStop)).toEqual({ t: 'stop', seq: 4294967295 });
+  });
+
+  it('parses err frames and tel v2 frames', () => {
+    const err = parseDeviceFrame('{"t":"err","code":"arm_refused","msg":"batt"}');
+    expect(err).toEqual({
+      t: 'err',
+      code: 'arm_refused',
+      msg: 'batt',
+    });
+
+    const telV2 = parseDeviceFrame(
+      '{"t":"tel","st":"ARMED","f":2.5,"thr":0.525,"str":-0.3,"vb":7.82,"vpct":71,"age":24}'
+    );
+    expect(telV2).toEqual({
+      t: 'tel',
+      st: 'ARMED',
+      f: 2.5,
+      thr: 0.525,
+      str: -0.3,
+      vb: 7.82,
+      vpct: 71,
+      age: 24,
+    });
+  });
+
   it('throws on unsupported client frame type', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(() => serializeClientFrame({ t: 'invalid' } as any)).toThrowError(

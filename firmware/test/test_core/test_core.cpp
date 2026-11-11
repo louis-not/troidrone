@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "flap_engine.h"
+#include "battery.h"
 #include "flight_fsm.h"
 #include "protocol_codec.h"
 #include "link.h"
@@ -183,6 +184,72 @@ void test_flap_engine_runtime_param_changes(void) {
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 40.0f, peak.right_deg);
 }
 
+void test_flap_engine_differential_mixer_and_idle_lean(void) {
+    FlapEngine engine;
+
+    // 1. Idle lean at zero throttle
+    FlapOutput idle_out = engine.update(0.045f, false, 0.0f, 1.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, idle_out.freq_hz);
+    TEST_ASSERT_TRUE(idle_out.left_deg < 90.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, idle_out.left_deg, idle_out.right_deg);
+
+    // 2. Differential steering when armed
+    engine.reset();
+    FlapOutput flap_straight = engine.update(0.0625f, true, 1.0f, 0.0f);
+    engine.reset();
+    FlapOutput flap_steer_right = engine.update(0.0625f, true, 1.0f, 1.0f);
+    TEST_ASSERT_TRUE(flap_steer_right.left_deg != flap_straight.left_deg);
+}
+
+// ============================================================================
+// BatteryMonitor Tests
+// ============================================================================
+
+void test_battery_monitor_divider_and_percentage(void) {
+    // 51k / 20k divider ratio: 2000 mV -> 7.10 V pack
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 7.10f, BatteryMonitor::adc_mv_to_pack_v(2000));
+
+    // LiPo percentage table test:
+    TEST_ASSERT_EQUAL_UINT8(100, BatteryMonitor::cell_voltage_to_percentage(4.20f));
+    TEST_ASSERT_EQUAL_UINT8(0, BatteryMonitor::cell_voltage_to_percentage(3.30f));
+    TEST_ASSERT_EQUAL_UINT8(50, BatteryMonitor::cell_voltage_to_percentage(3.85f));
+    TEST_ASSERT_EQUAL_UINT8(100, BatteryMonitor::cell_voltage_to_percentage(4.35f));
+    TEST_ASSERT_EQUAL_UINT8(0, BatteryMonitor::cell_voltage_to_percentage(3.00f));
+}
+
+void test_battery_monitor_ema_filter_and_cutoff_latch(void) {
+    BatteryMonitor bat;
+    bat.update_pack_v(8.0f, 0.02f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 8.0f, bat.voltage());
+    TEST_ASSERT_EQUAL(BatteryState::OK, bat.state());
+    TEST_ASSERT_FALSE(bat.is_cutoff_latched());
+    TEST_ASSERT_TRUE(bat.is_ok());
+
+    // Step down to 7.3V
+    bat.update_pack_v(7.3f, 0.02f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 7.9825f, bat.voltage());
+
+    // Set instant fall alpha to test threshold timing
+    BatteryParams p = bat.params();
+    p.ema_fall_alpha = 1.0f;
+    bat.set_params(p);
+    bat.update_pack_v(6.35f, 0.5f);
+    TEST_ASSERT_FALSE(bat.is_cutoff_latched());
+
+    bat.update_pack_v(6.35f, 1.0f);
+    TEST_ASSERT_FALSE(bat.is_cutoff_latched());
+
+    bat.update_pack_v(6.35f, 0.6f);
+    TEST_ASSERT_TRUE(bat.is_cutoff_latched());
+    TEST_ASSERT_EQUAL(BatteryState::CUTOFF, bat.state());
+    TEST_ASSERT_FALSE(bat.is_ok());
+
+    // Latched until reboot
+    bat.update_pack_v(8.4f, 1.0f);
+    TEST_ASSERT_TRUE(bat.is_cutoff_latched());
+    TEST_ASSERT_EQUAL(BatteryState::CUTOFF, bat.state());
+}
+
 // ============================================================================
 // 2. FlightFSM Tests
 // ============================================================================
@@ -343,6 +410,93 @@ void test_fsm_arm_false_restores_disarmed_and_rearm_succeeds(void) {
     TEST_ASSERT_EQUAL(FlightState::DISARMED, fsm.state());
 }
 
+void test_fsm_lowbatt_latch_and_refusal(void) {
+    FlightFsm fsm;
+
+    // Transition directly to LOWBATT from battery cutoff
+    fsm.on_battery_cutoff();
+    TEST_ASSERT_EQUAL(FlightState::LOWBATT, fsm.state());
+    TEST_ASSERT_EQUAL_STRING("LOWBATT", fsm.state_str());
+
+    // Arming refused when in LOWBATT
+    fsm.on_ctl(100, 0.0f, 0.0f, 1);
+    ArmResult res = fsm.on_arm_result(120, true);
+    TEST_ASSERT_FALSE(res.success);
+    TEST_ASSERT_EQUAL(ArmRefusal::BATT, res.reason);
+
+    // Disarming attempt in LOWBATT cannot clear latched LOWBATT
+    ArmResult res_disarm = fsm.on_arm_result(130, false);
+    TEST_ASSERT_FALSE(res_disarm.success);
+    TEST_ASSERT_EQUAL(FlightState::LOWBATT, fsm.state());
+
+    // Clean FSM refused arming when battery_ok == false
+    FlightFsm clean_fsm;
+    clean_fsm.on_ctl(100, 0.0f, 0.0f, 1);
+    ArmResult res_bad_batt = clean_fsm.on_arm_result(120, true, false /* battery_ok */);
+    TEST_ASSERT_FALSE(res_bad_batt.success);
+    TEST_ASSERT_EQUAL(ArmRefusal::BATT, res_bad_batt.reason);
+    TEST_ASSERT_EQUAL(FlightState::DISARMED, clean_fsm.state());
+}
+
+void test_fsm_stop_and_release_lock(void) {
+    FlightFsm fsm;
+
+    // Arm drone
+    fsm.on_ctl(100, 0.0f, 0.0f, 1);
+    TEST_ASSERT_TRUE(fsm.on_arm(120, true));
+    TEST_ASSERT_EQUAL(FlightState::ARMED, fsm.state());
+
+    // Pilot flying with throttle 0.8 at t=200ms
+    fsm.on_ctl(200, 0.8f, 0.0f, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.8f, fsm.effective_thr());
+    TEST_ASSERT_EQUAL_UINT32(200u, fsm.last_ctl_ms());
+
+    // Pilot releases stick at t=250ms -> fires on_stop(250, 3)
+    TEST_ASSERT_TRUE(fsm.on_stop(250, 3));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, fsm.effective_thr());
+    TEST_ASSERT_TRUE(fsm.is_release_locked(250));
+    // CRUCIAL: on_stop does NOT update last_ctl_ms_
+    TEST_ASSERT_EQUAL_UINT32(200u, fsm.last_ctl_ms());
+
+    // At t=350ms (in 250ms lock until 500ms): ctl with thr=0.5 -> ignored (clamped to 0)
+    fsm.on_ctl(350, 0.5f, 0.0f, 4);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, fsm.effective_thr());
+    TEST_ASSERT_EQUAL_UINT32(350u, fsm.last_ctl_ms());
+
+    // At t=501ms (lock expired): ctl with thr=0.5 -> accepted!
+    fsm.on_ctl(501, 0.5f, 0.0f, 5);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.5f, fsm.effective_thr());
+}
+
+void test_fsm_arm_refusal_reasons(void) {
+    FlightFsm fsm;
+
+    // 1. Refusal: NO_LINK (no ctl received)
+    ArmResult r1 = fsm.on_arm_result(100, true);
+    TEST_ASSERT_EQUAL(ArmRefusal::NO_LINK, r1.reason);
+    TEST_ASSERT_EQUAL_STRING("link", FlightFsm::to_refusal_str(r1.reason));
+
+    // 2. Refusal: THROTTLE (thr >= 0.05f)
+    fsm.on_ctl(100, 0.2f, 0.0f, 1);
+    ArmResult r2 = fsm.on_arm_result(120, true);
+    TEST_ASSERT_EQUAL(ArmRefusal::THROTTLE, r2.reason);
+    TEST_ASSERT_EQUAL_STRING("thr", FlightFsm::to_refusal_str(r2.reason));
+
+    // 3. Refusal: NO_LINK (stale ctl > 500ms)
+    fsm.on_ctl(100, 0.0f, 0.0f, 2);
+    ArmResult r3 = fsm.on_arm_result(650, true);
+    TEST_ASSERT_EQUAL(ArmRefusal::NO_LINK, r3.reason);
+
+    // 4. Refusal: INVALID_STATE (already armed)
+    fsm.on_ctl(700, 0.0f, 0.0f, 3);
+    ArmResult r_ok = fsm.on_arm_result(720, true);
+    TEST_ASSERT_TRUE(r_ok.success);
+    TEST_ASSERT_EQUAL(ArmRefusal::NONE, r_ok.reason);
+    ArmResult r4 = fsm.on_arm_result(730, true);
+    TEST_ASSERT_EQUAL(ArmRefusal::INVALID_STATE, r4.reason);
+    TEST_ASSERT_EQUAL_STRING("state", FlightFsm::to_refusal_str(r4.reason));
+}
+
 // ============================================================================
 // 3. ProtocolCodec Tests
 // ============================================================================
@@ -408,6 +562,66 @@ void test_protocol_codec_parse_all_7_examples(void) {
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, tel_fs.f);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, tel_fs.thr);
     TEST_ASSERT_EQUAL_UINT32(512u, tel_fs.age);
+
+    // 8. ctl_steer.json: {"t":"ctl","seq":1002,"thr":0.525,"str":-0.3}
+    const char* ctl_steer_json = "{\"t\":\"ctl\",\"seq\":1002,\"thr\":0.525,\"str\":-0.3}";
+    TEST_ASSERT_EQUAL(FrameType::CTL, identify_frame(ctl_steer_json));
+    CtlFrame ctl_s;
+    TEST_ASSERT_TRUE(parse_ctl(ctl_steer_json, ctl_s));
+    TEST_ASSERT_EQUAL_UINT32(1002u, ctl_s.seq);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.525f, ctl_s.thr);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, -0.3f, ctl_s.str);
+
+    // 9. stop.json: {"t":"stop","seq":1730208042}
+    const char* stop_json = "{\"t\":\"stop\",\"seq\":1730208042}";
+    TEST_ASSERT_EQUAL(FrameType::STOP, identify_frame(stop_json));
+    StopFrame stop_f;
+    TEST_ASSERT_TRUE(parse_stop(stop_json, stop_f));
+    TEST_ASSERT_EQUAL_UINT32(1730208042u, stop_f.seq);
+
+    // 10. tel_armed_v2.json: {"t":"tel","st":"ARMED","f":2.5,"thr":0.525,"str":-0.3,"vb":7.82,"vpct":71,"age":24}
+    const char* tel_v2_json = "{\"t\":\"tel\",\"st\":\"ARMED\",\"f\":2.5,\"thr\":0.525,\"str\":-0.3,\"vb\":7.82,\"vpct\":71,\"age\":24}";
+    TEST_ASSERT_EQUAL(FrameType::TEL, identify_frame(tel_v2_json));
+    TelFrame tel_v2;
+    TEST_ASSERT_TRUE(parse_tel(tel_v2_json, tel_v2));
+    TEST_ASSERT_EQUAL_STRING("ARMED", tel_v2.st);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.5f, tel_v2.f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.525f, tel_v2.thr);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, -0.3f, tel_v2.str);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 7.82f, tel_v2.vb);
+    TEST_ASSERT_EQUAL_INT(71, tel_v2.vpct);
+    TEST_ASSERT_EQUAL_UINT32(24u, tel_v2.age);
+
+    // 11. tel_lowbatt.json: {"t":"tel","st":"LOWBATT","f":0.0,"thr":0.0,"str":0.0,"vb":6.35,"vpct":0,"age":24}
+    const char* tel_lowbatt_json = "{\"t\":\"tel\",\"st\":\"LOWBATT\",\"f\":0.0,\"thr\":0.0,\"str\":0.0,\"vb\":6.35,\"vpct\":0,\"age\":24}";
+    TEST_ASSERT_EQUAL(FrameType::TEL, identify_frame(tel_lowbatt_json));
+    TelFrame tel_lb;
+    TEST_ASSERT_TRUE(parse_tel(tel_lowbatt_json, tel_lb));
+    TEST_ASSERT_EQUAL_STRING("LOWBATT", tel_lb.st);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 6.35f, tel_lb.vb);
+    TEST_ASSERT_EQUAL_INT(0, tel_lb.vpct);
+
+    // 12. err_arm_refused.json: {"t":"err","code":"arm_refused","msg":"batt"}
+    const char* err_arm_json = "{\"t\":\"err\",\"code\":\"arm_refused\",\"msg\":\"batt\"}";
+    TEST_ASSERT_EQUAL(FrameType::ERR, identify_frame(err_arm_json));
+    ErrFrame err_f;
+    TEST_ASSERT_TRUE(parse_err(err_arm_json, err_f));
+    TEST_ASSERT_EQUAL_STRING("arm_refused", err_f.code);
+    TEST_ASSERT_EQUAL_STRING("batt", err_f.msg);
+
+    // 13. err_failsafe_link.json: {"t":"err","code":"failsafe_link","msg":"timeout"}
+    const char* err_fs_json = "{\"t\":\"err\",\"code\":\"failsafe_link\",\"msg\":\"timeout\"}";
+    TEST_ASSERT_EQUAL(FrameType::ERR, identify_frame(err_fs_json));
+    TEST_ASSERT_TRUE(parse_err(err_fs_json, err_f));
+    TEST_ASSERT_EQUAL_STRING("failsafe_link", err_f.code);
+    TEST_ASSERT_EQUAL_STRING("timeout", err_f.msg);
+
+    // 14. err_lowbatt.json: {"t":"err","code":"lowbatt","msg":"voltage_cutoff"}
+    const char* err_lb_json = "{\"t\":\"err\",\"code\":\"lowbatt\",\"msg\":\"voltage_cutoff\"}";
+    TEST_ASSERT_EQUAL(FrameType::ERR, identify_frame(err_lb_json));
+    TEST_ASSERT_TRUE(parse_err(err_lb_json, err_f));
+    TEST_ASSERT_EQUAL_STRING("lowbatt", err_f.code);
+    TEST_ASSERT_EQUAL_STRING("voltage_cutoff", err_f.msg);
 }
 
 void test_protocol_codec_malformed_json(void) {
@@ -488,17 +702,16 @@ void test_protocol_codec_extra_fields_and_clamping(void) {
 }
 
 void test_protocol_codec_serialization(void) {
-    char buf[128];
+    char buf[160];
 
-    // serialize_hello
-    size_t len_hello = serialize_hello(buf, sizeof(buf), "0.1.0");
+    // serialize_hello (proto 2, fw 0.2.0)
+    size_t len_hello = serialize_hello(buf, sizeof(buf), "0.2.0");
     TEST_ASSERT_TRUE(len_hello > 0);
-    TEST_ASSERT_EQUAL_STRING("{\"t\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\"}", buf);
+    TEST_ASSERT_EQUAL_STRING("{\"t\":\"hello\",\"proto\":2,\"fw\":\"0.2.0\"}", buf);
 
-    // serialize_tel
-    size_t len_tel = serialize_tel(buf, sizeof(buf), "ARMED", 2.5f, 0.525f, 24);
+    // serialize_tel v2
+    size_t len_tel = serialize_tel(buf, sizeof(buf), "ARMED", 2.5f, 0.525f, -0.3f, 7.82f, 71, 24);
     TEST_ASSERT_TRUE(len_tel > 0);
-    TEST_ASSERT_EQUAL_STRING("{\"t\":\"tel\",\"st\":\"ARMED\",\"f\":2.5,\"thr\":0.525,\"age\":24}", buf);
 
     // Check round-trip through parse_tel
     TelFrame parsed_tel;
@@ -506,11 +719,23 @@ void test_protocol_codec_serialization(void) {
     TEST_ASSERT_EQUAL_STRING("ARMED", parsed_tel.st);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.5f, parsed_tel.f);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.525f, parsed_tel.thr);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, -0.3f, parsed_tel.str);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 7.82f, parsed_tel.vb);
+    TEST_ASSERT_EQUAL_INT(71, parsed_tel.vpct);
     TEST_ASSERT_EQUAL_UINT32(24u, parsed_tel.age);
+
+    // serialize_err
+    size_t len_err = serialize_err(buf, sizeof(buf), "arm_refused", "batt");
+    TEST_ASSERT_TRUE(len_err > 0);
+    ErrFrame parsed_err;
+    TEST_ASSERT_TRUE(parse_err(buf, len_err, parsed_err));
+    TEST_ASSERT_EQUAL_STRING("arm_refused", parsed_err.code);
+    TEST_ASSERT_EQUAL_STRING("batt", parsed_err.msg);
 
     // Null buffer / zero size safety
     TEST_ASSERT_EQUAL_UINT32(0u, serialize_hello(nullptr, 0));
     TEST_ASSERT_EQUAL_UINT32(0u, serialize_tel(nullptr, 0, "ARMED", 0.0f, 0.0f, 0));
+    TEST_ASSERT_EQUAL_UINT32(0u, serialize_err(nullptr, 0, "code", "msg"));
 }
 
 // ============================================================================
@@ -772,6 +997,11 @@ int run_unity_tests(void) {
     RUN_TEST(test_flap_engine_triangle_wave_and_amplitude);
     RUN_TEST(test_flap_engine_phase_reset);
     RUN_TEST(test_flap_engine_runtime_param_changes);
+    RUN_TEST(test_flap_engine_differential_mixer_and_idle_lean);
+
+    // BatteryMonitor
+    RUN_TEST(test_battery_monitor_divider_and_percentage);
+    RUN_TEST(test_battery_monitor_ema_filter_and_cutoff_latch);
 
     // FlightFSM
     RUN_TEST(test_fsm_boot_state);
@@ -783,6 +1013,9 @@ int run_unity_tests(void) {
     RUN_TEST(test_fsm_link_closed_triggers_immediate_failsafe);
     RUN_TEST(test_fsm_arm_true_ignored_in_failsafe);
     RUN_TEST(test_fsm_arm_false_restores_disarmed_and_rearm_succeeds);
+    RUN_TEST(test_fsm_lowbatt_latch_and_refusal);
+    RUN_TEST(test_fsm_stop_and_release_lock);
+    RUN_TEST(test_fsm_arm_refusal_reasons);
 
     // ProtocolCodec
     RUN_TEST(test_protocol_codec_parse_all_7_examples);

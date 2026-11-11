@@ -8,7 +8,21 @@
 enum class FlightState {
     DISARMED,
     ARMED,
-    FAILSAFE
+    FAILSAFE,
+    LOWBATT
+};
+
+enum class ArmRefusal {
+    NONE = 0,
+    BATT,
+    THROTTLE,
+    NO_LINK,
+    INVALID_STATE
+};
+
+struct ArmResult {
+    bool success;
+    ArmRefusal reason;
 };
 
 class FlightFsm {
@@ -18,9 +32,13 @@ public:
     FlightState state() const { return state_; }
     const char* state_str() const;
     static const char* to_string(FlightState s);
+    static const char* to_refusal_str(ArmRefusal r);
 
     void on_ctl(uint32_t now_ms, float thr, float str, uint32_t seq);
-    bool on_arm(uint32_t now_ms, bool v);
+    bool on_stop(uint32_t now_ms, uint32_t seq);
+    ArmResult on_arm_result(uint32_t now_ms, bool v, bool battery_ok = true);
+    bool on_arm(uint32_t now_ms, bool v, bool battery_ok = true);
+    void on_battery_cutoff();
     void on_link_closed();
     void step(uint32_t now_ms);
 
@@ -31,6 +49,7 @@ public:
     uint32_t last_seq() const { return last_seq_; }
     bool has_ctl() const { return has_ctl_; }
     uint32_t last_ctl_ms() const { return last_ctl_ms_; }
+    bool is_release_locked(uint32_t now_ms) const { return now_ms < release_lock_until_ms_; }
 
     void reset();
 
@@ -41,10 +60,13 @@ private:
     float last_thr_ = 0.0f;
     float last_str_ = 0.0f;
     uint32_t last_seq_ = 0;
+    uint32_t release_lock_until_ms_ = 0;
 };
 
 namespace troidrone {
     using ::FlightState;
+    using ::ArmRefusal;
+    using ::ArmResult;
     using ::FlightFsm;
 }
 

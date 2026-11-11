@@ -1,12 +1,15 @@
 /**
- * Flight Deck Single-Screen Controller UI Component.
- * Implements high-contrast dark tactical flight instrumentation.
+ * TROIDRONE MK-2 Physical RC Flight Transmitter UI Component (MVP 2).
+ * Mode 2 Dual Gimbals (Throttle vertical with dead-man snap, Steer horizontal with spring return),
+ * mechanical shoulder switches, live 4-channel servo monitor, center LCD touchscreen.
  */
 
 import type { ControllerState, FlightState } from '../store';
 
 export interface FlightDeckCallbacks {
   onThrottleChange: (value: number) => void;
+  onSteerChange: (value: number) => void;
+  onStickRelease: () => void;
   onThrottleReset: () => void;
   onArmAction: (arm: boolean) => void;
 }
@@ -19,452 +22,666 @@ export interface FlightDeckUI {
 
 export function createFlightDeckUI(callbacks: FlightDeckCallbacks): FlightDeckUI {
   const container = document.createElement('div');
-  container.className = 'flight-deck';
+  container.id = 'rc-transmitter-chassis';
 
-  // Construct UI markup
   container.innerHTML = `
-    <header class="flight-deck-header">
-      <div class="deck-topline">
-        <div class="drone-branding">
-          <span class="radar-dot" aria-hidden="true"></span>
-          <span class="drone-callsign">TROIDRONE MK-1</span>
-          <span class="tactical-badge">SYS:OK</span>
+    <!-- Side Textured Grips -->
+    <div class="rc-side-grip rc-grip-left"></div>
+    <div class="rc-side-grip rc-grip-right"></div>
+
+    <!-- 1. Top Shoulder -->
+    <header class="rc-top-shoulder">
+      <div class="rc-switches-group">
+        <!-- Switch SA: Arm / Disarm Interlock -->
+        <div class="rc-toggle-unit" id="switch-sa" data-testid="switch-sa" title="Switch SA: Arm / Disarm Interlock">
+          <span class="rc-switch-label">SW [SA]</span>
+          <div class="rc-lever-housing" id="sa-housing">
+            <div class="rc-lever-stem"></div>
+          </div>
         </div>
-        <div
-          class="state-badge state-badge--disconnected"
-          data-testid="state-badge"
-          title="Firmware: Unknown"
-          role="status"
-          aria-live="polite"
-        ><span class="state-badge-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span><span class="state-badge-label">DISCONNECTED</span></div>
+
+        <!-- Switch SB: Flight Mode -->
+        <div class="rc-toggle-unit" id="switch-sb" title="Switch SB: Mode">
+          <span class="rc-switch-label">SW [SB]</span>
+          <div class="rc-lever-housing" id="sb-housing">
+            <div class="rc-lever-stem"></div>
+          </div>
+        </div>
       </div>
 
-      <div class="telemetry-bar">
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <svg class="telemetry-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span class="telemetry-label">LINK AGE</span>
-          </div>
-          <div class="telemetry-value-wrap">
-            <span class="telemetry-val" data-testid="link-age">--- ms</span>
+      <!-- Center Brand Crest -->
+      <div class="rc-brand-crest">
+        <div class="rc-brand-logo">TROIDRONE <span>MK-2</span></div>
+        <div class="rc-model-tag">S3 2.4GHz</div>
+      </div>
+
+      <div class="rc-switches-group">
+        <!-- Switch SC: Reserved -->
+        <div class="rc-toggle-unit" id="switch-sc" title="Switch SC">
+          <span class="rc-switch-label">SW [SC]</span>
+          <div class="rc-lever-housing" id="sc-housing">
+            <div class="rc-lever-stem"></div>
           </div>
         </div>
 
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <svg class="telemetry-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span class="telemetry-label">FLAP RATE</span>
-          </div>
-          <div class="telemetry-value-wrap">
-            <span class="telemetry-val" data-testid="flap-rate">0.0 Hz</span>
+        <!-- Switch SD: Emergency Motor Cut -->
+        <div class="rc-toggle-unit" id="switch-sd" data-testid="switch-sd" title="Switch SD: Emergency Motor Cut">
+          <span class="rc-switch-label">SW [SD]</span>
+          <div class="rc-lever-housing active" id="sd-housing">
+            <div class="rc-lever-stem"></div>
           </div>
         </div>
       </div>
     </header>
 
-    <main class="throttle-deck">
-      <div
-        class="throttle-stick"
-        data-testid="throttle-stick"
-        role="slider"
-        aria-label="Throttle"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        aria-valuenow="0"
-        aria-valuetext="0%"
-        aria-orientation="vertical"
-        tabindex="0"
-      >
-        <div class="stick-scale" aria-hidden="true">
-          <div class="scale-mark mark-100"><span class="scale-tick"></span><span class="scale-label">100%</span></div>
-          <div class="scale-mark mark-75"><span class="scale-tick"></span><span class="scale-label">75%</span></div>
-          <div class="scale-mark mark-50"><span class="scale-tick"></span><span class="scale-label">50%</span></div>
-          <div class="scale-mark mark-25"><span class="scale-tick"></span><span class="scale-label">25%</span></div>
-          <div class="scale-mark mark-0"><span class="scale-tick"></span><span class="scale-label">0%</span></div>
-        </div>
+    <!-- 2. Main Cockpit -->
+    <main class="rc-main-cockpit">
+      <!-- LEFT GIMBAL (Mode 2: Throttle Vertical 0..100%) -->
+      <section class="rc-gimbal-column" aria-label="Left Gimbal Throttle Control">
+        <div
+          class="rc-gimbal-bezel"
+          id="left-gimbal-bezel"
+          data-testid="throttle-stick"
+          role="slider"
+          aria-label="Throttle"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          tabindex="0"
+          title="Left Gimbal: Drag Up for Throttle (Release: Dead-Man Snap to 0)"
+        >
+          <div class="rc-collar-circle"></div>
+          <div class="rc-axis-tick-v"></div>
+          <div class="rc-axis-tick-h"></div>
+          <div class="rc-center-red-v"></div>
+          <div class="rc-center-red-h"></div>
 
-        <div class="stick-rail" aria-hidden="true">
-          <div class="stick-fill"></div>
-        </div>
+          <span class="rc-tick-label tick-top">100% THR</span>
+          <span class="rc-tick-label tick-bot">0% THR</span>
+          <span class="rc-tick-label tick-left">-10</span>
+          <span class="rc-tick-label tick-right">+10</span>
 
-        <div class="stick-readout">
-          <span class="readout-label">THRUST LEVEL</span>
-          <span class="readout-val" data-testid="throttle-value">0%</span>
-        </div>
-
-        <div class="throttle-thumb" data-testid="throttle-thumb">
-          <div class="thumb-grip" aria-hidden="true">
-            <span class="grip-line"></span>
-            <span class="grip-line"></span>
-            <span class="grip-line"></span>
+          <!-- Left Stick Puck Head -->
+          <div class="rc-stick-puck" id="left-stick-puck" data-testid="throttle-thumb">
+            <div class="rc-knurled-crown"></div>
           </div>
-          <div class="thumb-indicator" aria-hidden="true"></div>
         </div>
-      </div>
 
-      <div class="safety-advisory" aria-hidden="true">
-        <span class="advisory-icon">⚠</span>
-        <span class="advisory-text">DEAD-MAN SWITCH • RELEASE TO CUT THRUST</span>
-      </div>
+        <div class="rc-trim-row">
+          <span>THROTTLE: <strong id="readout-thr-pct" data-testid="throttle-value" style="color: #fff;">0%</strong></span>
+          <span class="rc-trim-rocker">T3: 0</span>
+        </div>
+      </section>
+
+      <!-- CENTER: Integrated Color LCD Screen -->
+      <section class="rc-center-lcd" aria-label="Transmitter LCD Screen">
+        <!-- Top Status Bar -->
+        <div class="rc-lcd-topbar">
+          <div>
+            <span>MDL: <strong>TROIDRONE-1</strong></span>
+          </div>
+          <div>
+            <span>LINK: <strong id="lcd-link-age" data-testid="link-age">--- ms</strong></span>
+          </div>
+          <div>
+            <span>2S BATT: <strong class="lcd-tx-batt nominal" id="lcd-batt-volts" data-testid="batt-volts">--- V</strong> (<span id="lcd-batt-pct" data-testid="batt-pct">--%</span>)</span>
+          </div>
+        </div>
+
+        <div class="rc-lcd-dashboard">
+          <!-- Timers & Master State Capsule -->
+          <div class="rc-lcd-master-row">
+            <div class="rc-flight-timer" id="lcd-timer" data-testid="flight-timer">00:00.0</div>
+            <div
+              class="rc-state-capsule disarmed"
+              id="lcd-fsm-capsule"
+              data-testid="state-badge"
+              role="status"
+              aria-live="polite"
+            >DISCONNECTED</div>
+          </div>
+
+          <!-- Release Lock Banner -->
+          <div class="rc-lcd-lock-banner" id="lcd-lock-banner" data-testid="lock-banner">
+            ⚠ 250ms RELEASE LOCK ACTIVE (THROTTLE LOCKED)
+          </div>
+
+          <!-- Flap Frequency & Steer Readout -->
+          <div class="rc-lcd-metrics-grid">
+            <div class="rc-metric-tile">
+              <div class="rc-metric-tile-label">Flap Frequency</div>
+              <div class="rc-metric-tile-val"><span id="lcd-flap-hz" data-testid="flap-rate">0.0 Hz</span></div>
+            </div>
+            <div class="rc-metric-tile">
+              <div class="rc-metric-tile-label">Steer Deflection</div>
+              <div class="rc-metric-tile-val" id="lcd-steer-bias">0.00</div>
+            </div>
+          </div>
+
+          <!-- Live 4-Channel Servo Monitor -->
+          <div class="rc-channel-monitor">
+            <div class="rc-ch-row">
+              <span style="width: 46px;">CH1 THR</span>
+              <div class="rc-ch-bar-track">
+                <div class="rc-ch-bar-fill" id="ch1-bar" data-testid="ch1-bar" style="width: 0%; left: 0;"></div>
+              </div>
+              <span style="width: 32px; text-align: right;" id="ch1-val">0%</span>
+            </div>
+            <div class="rc-ch-row">
+              <span style="width: 46px;">CH2 STR</span>
+              <div class="rc-ch-bar-track">
+                <div class="rc-ch-bar-fill" id="ch2-bar" data-testid="ch2-bar" style="width: 0%; left: 50%;"></div>
+              </div>
+              <span style="width: 32px; text-align: right;" id="ch2-val">0.00</span>
+            </div>
+            <div class="rc-ch-row">
+              <span style="width: 46px;">CH3 W-L</span>
+              <div class="rc-ch-bar-track">
+                <div class="rc-ch-bar-fill" id="ch3-bar" data-testid="ch3-bar" style="width: 50%; left: 0;"></div>
+              </div>
+              <span style="width: 32px; text-align: right;" id="ch3-val">90°</span>
+            </div>
+            <div class="rc-ch-row">
+              <span style="width: 46px;">CH4 W-R</span>
+              <div class="rc-ch-bar-track">
+                <div class="rc-ch-bar-fill" id="ch4-bar" data-testid="ch4-bar" style="width: 50%; left: 0;"></div>
+              </div>
+              <span style="width: 32px; text-align: right;" id="ch4-val">90°</span>
+            </div>
+          </div>
+
+          <!-- Bottom Safety Triggers -->
+          <div class="rc-safety-trigger-strip">
+            <button class="rc-hold-arm-btn" id="btn-hold-arm" data-testid="arm-button" type="button" disabled><div class="rc-arm-fill-indicator" id="arm-progress-fill"></div><span id="arm-label-text">DISCONNECTED</span></button>
+            <button class="rc-cutoff-btn" id="btn-emergency-cutoff" data-testid="emergency-cutoff" type="button">
+              <span>⛔</span>
+              <span>EMERGENCY MOTOR CUT</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT GIMBAL (Mode 2: Steering Horizontal -100%..+100%) -->
+      <section class="rc-gimbal-column" aria-label="Right Gimbal Steering Control">
+        <div
+          class="rc-gimbal-bezel"
+          id="right-gimbal-bezel"
+          data-testid="steer-stick"
+          role="slider"
+          aria-label="Steering"
+          aria-valuemin="-100"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          tabindex="0"
+          title="Right Gimbal: Drag Left/Right for Steering (Spring Return to Center)"
+        >
+          <div class="rc-collar-circle"></div>
+          <div class="rc-axis-tick-v"></div>
+          <div class="rc-axis-tick-h"></div>
+          <div class="rc-center-red-v"></div>
+          <div class="rc-center-red-h"></div>
+
+          <span class="rc-tick-label tick-top">+10</span>
+          <span class="rc-tick-label tick-bot">-10</span>
+          <span class="rc-tick-label tick-left">◀ L</span>
+          <span class="rc-tick-label tick-right">R ▶</span>
+
+          <!-- Right Stick Puck Head -->
+          <div class="rc-stick-puck" id="right-stick-puck" data-testid="steer-thumb">
+            <div class="rc-knurled-crown"></div>
+          </div>
+        </div>
+
+        <div class="rc-trim-row">
+          <span>STEER: <strong id="readout-str-val" data-testid="steer-value" style="color: #fff;">0.00</strong></span>
+          <span class="rc-trim-rocker">T1: 0</span>
+        </div>
+      </section>
     </main>
-
-    <footer class="flight-deck-footer">
-      <button
-        class="arm-button arm-button--disconnected"
-        data-testid="arm-button"
-        disabled
-        type="button"
-      ><span class="arm-btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/></svg></span><span class="arm-btn-label">DISCONNECTED</span></button>
-    </footer>
   `;
 
-  // Element references
-  const stateBadgeEl = container.querySelector<HTMLElement>('[data-testid="state-badge"]')!;
-  const linkAgeEl = container.querySelector<HTMLElement>('[data-testid="link-age"]')!;
-  const flapRateEl = container.querySelector<HTMLElement>('[data-testid="flap-rate"]')!;
-  const throttleStickEl = container.querySelector<HTMLElement>('[data-testid="throttle-stick"]')!;
-  const throttleThumbEl = container.querySelector<HTMLElement>('[data-testid="throttle-thumb"]')!;
-  const throttleValueEl = container.querySelector<HTMLElement>('[data-testid="throttle-value"]')!;
-  const stickFillEl = container.querySelector<HTMLElement>('.stick-fill')!;
-  const armButtonEl = container.querySelector<HTMLButtonElement>('[data-testid="arm-button"]')!;
+  // Element handles
+  const leftBezel = container.querySelector<HTMLElement>('#left-gimbal-bezel')!;
+  const leftPuck = container.querySelector<HTMLElement>('#left-stick-puck')!;
+  const rightBezel = container.querySelector<HTMLElement>('#right-gimbal-bezel')!;
+  const rightPuck = container.querySelector<HTMLElement>('#right-stick-puck')!;
 
-  let isDragging = false;
-  let activePointerId: number | null = null;
-  let currentFlightState: FlightState = 'DISARMED';
+  const thrReadout = container.querySelector<HTMLElement>('#readout-thr-pct')!;
+  const strReadout = container.querySelector<HTMLElement>('#readout-str-val')!;
+
+  const stateBadge = container.querySelector<HTMLElement>('#lcd-fsm-capsule')!;
+  const linkAgeEl = container.querySelector<HTMLElement>('#lcd-link-age')!;
+  const flapHzEl = container.querySelector<HTMLElement>('#lcd-flap-hz')!;
+  const steerBiasEl = container.querySelector<HTMLElement>('#lcd-steer-bias')!;
+  const timerEl = container.querySelector<HTMLElement>('#lcd-timer')!;
+  const battVoltsEl = container.querySelector<HTMLElement>('#lcd-batt-volts')!;
+  const battPctEl = container.querySelector<HTMLElement>('#lcd-batt-pct')!;
+  const lockBannerEl = container.querySelector<HTMLElement>('#lcd-lock-banner')!;
+
+  const ch1Bar = container.querySelector<HTMLElement>('#ch1-bar')!;
+  const ch1Val = container.querySelector<HTMLElement>('#ch1-val')!;
+  const ch2Bar = container.querySelector<HTMLElement>('#ch2-bar')!;
+  const ch2Val = container.querySelector<HTMLElement>('#ch2-val')!;
+  const ch3Bar = container.querySelector<HTMLElement>('#ch3-bar')!;
+  const ch3Val = container.querySelector<HTMLElement>('#ch3-val')!;
+  const ch4Bar = container.querySelector<HTMLElement>('#ch4-bar')!;
+  const ch4Val = container.querySelector<HTMLElement>('#ch4-val')!;
+
+  const armButton = container.querySelector<HTMLButtonElement>('#btn-hold-arm')!;
+  const armLabel = container.querySelector<HTMLElement>('#arm-label-text')!;
+  const armProgressFill = container.querySelector<HTMLElement>('#arm-progress-fill')!;
+  const cutoffButton = container.querySelector<HTMLButtonElement>('#btn-emergency-cutoff')!;
+
+  const switchSa = container.querySelector<HTMLElement>('#switch-sa')!;
+  const saHousing = container.querySelector<HTMLElement>('#sa-housing')!;
+  const switchSd = container.querySelector<HTMLElement>('#switch-sd')!;
+
+  // Internal state
+  let currentFlightState: FlightState | 'DISCONNECTED' | 'PROTO_MISMATCH' = 'DISCONNECTED';
   let isConnected = false;
+  let armedStartTime: number | null = null;
+  let timerInterval: ReturnType<typeof setInterval> | null = null;
+  let releaseLockTimeout: ReturnType<typeof setTimeout> | null = null;
+  let wakeLockSentinel: unknown = null;
 
-  // Pointer position to throttle value mapping
-  const updateThrottleFromPointer = (clientY: number): void => {
-    const rect = throttleStickEl.getBoundingClientRect();
-    const height = rect.height;
-    if (height <= 0) return;
+  // Gimbal control constants
+  const GIMBAL_TRAVEL_RADIUS = 50; // px travel from center
 
-    // Linear mapping: bottom (rect.bottom) = 0.0, top (rect.top) = 1.0
-    const fraction = (rect.bottom - clientY) / height;
-    const clamped = Math.max(0, Math.min(1, fraction));
+  // --- Left Gimbal (Throttle) Handling ---
+  let isDraggingLeft = false;
+  let leftPointerId: number | null = null;
+
+  const updateThrottleFromPointer = (clientY: number) => {
+    const rect = leftBezel.getBoundingClientRect();
+    const centerY = rect.top + rect.height / 2;
+    // Top of stroke (+radius) = 1.0, bottom of stroke (-radius) = 0.0
+    const rawDeltaY = centerY - clientY; // positive when dragged UP
+    const normalized = (rawDeltaY + GIMBAL_TRAVEL_RADIUS) / (2 * GIMBAL_TRAVEL_RADIUS);
+    const clamped = Math.max(0, Math.min(1, normalized));
+
+    // Update thumb translation
+    const currentTranslateY = GIMBAL_TRAVEL_RADIUS - clamped * (2 * GIMBAL_TRAVEL_RADIUS);
+    leftPuck.style.transform = `translate(0px, ${currentTranslateY}px)`;
+
     callbacks.onThrottleChange(clamped);
   };
 
-  // Immediate dead-man switch snap to 0.0
-  const snapToZero = (pointerId?: number): void => {
-    if (pointerId !== undefined && activePointerId !== null && pointerId !== activePointerId) {
-      return;
+  const snapLeftToZero = () => {
+    if (leftPointerId !== null && leftBezel.hasPointerCapture(leftPointerId)) {
+      try { leftBezel.releasePointerCapture(leftPointerId); } catch { /* ignore */ }
     }
-    if (activePointerId !== null && throttleStickEl.hasPointerCapture(activePointerId)) {
-      try {
-        throttleStickEl.releasePointerCapture(activePointerId);
-      } catch {
-        // ignore capture release error
-      }
-    }
-    isDragging = false;
-    activePointerId = null;
-    throttleStickEl.classList.remove('throttle-stick--active');
+    isDraggingLeft = false;
+    leftPointerId = null;
+    leftBezel.classList.remove('gimbal--active');
 
-    // Dead-man safety: reset throttle input in store immediately
+    // Dead-man snap: puck moves instantly to bottom
+    leftPuck.style.transform = `translate(0px, ${GIMBAL_TRAVEL_RADIUS}px)`;
+
+    // Fire callbacks
     callbacks.onThrottleReset();
+    callbacks.onStickRelease();
 
-    // Immediate DOM snap
-    updateThrottleVisuals(0);
+    // Show release lock banner for 250 ms
+    showReleaseLock(250);
   };
 
-  const handlePointerDown = (e: PointerEvent): void => {
+  leftBezel.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    activePointerId = e.pointerId;
-    isDragging = true;
-    throttleStickEl.classList.add('throttle-stick--active');
-    try {
-      throttleStickEl.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
+    leftPointerId = e.pointerId;
+    isDraggingLeft = true;
+    leftBezel.classList.add('gimbal--active');
+    try { leftBezel.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     updateThrottleFromPointer(e.clientY);
-  };
+  });
 
-  const handlePointerMove = (e: PointerEvent): void => {
-    if (isDragging && (activePointerId === null || activePointerId === e.pointerId)) {
+  leftBezel.addEventListener('pointermove', (e) => {
+    if (isDraggingLeft && (leftPointerId === null || leftPointerId === e.pointerId)) {
       updateThrottleFromPointer(e.clientY);
     }
+  });
+
+  leftBezel.addEventListener('pointerup', () => snapLeftToZero());
+  leftBezel.addEventListener('pointercancel', () => snapLeftToZero());
+
+  // --- Right Gimbal (Steering) Handling ---
+  let isDraggingRight = false;
+  let rightPointerId: number | null = null;
+
+  const updateSteerFromPointer = (clientX: number) => {
+    const rect = rightBezel.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const deltaX = clientX - centerX; // positive when dragged RIGHT
+    const clampedPx = Math.max(-GIMBAL_TRAVEL_RADIUS, Math.min(GIMBAL_TRAVEL_RADIUS, deltaX));
+    const normalized = clampedPx / GIMBAL_TRAVEL_RADIUS; // -1.0 .. +1.0
+
+    rightPuck.style.transform = `translate(${clampedPx}px, 0px)`;
+    callbacks.onSteerChange(normalized);
   };
 
-  const handlePointerUp = (e: PointerEvent): void => {
-    snapToZero(e.pointerId);
-  };
-
-  const handlePointerCancel = (e: PointerEvent): void => {
-    snapToZero(e.pointerId);
-  };
-
-  const handleLostPointerCapture = (e: PointerEvent): void => {
-    snapToZero(e.pointerId);
-  };
-
-  // Keyboard accessibility for throttle stick
-  const handleKeyDown = (e: KeyboardEvent): void => {
-    const current = Number(throttleStickEl.getAttribute('aria-valuenow') ?? 0) / 100;
-    let next = current;
-    if (e.key === 'ArrowUp') {
-      next = Math.min(1, current + 0.05);
-      e.preventDefault();
-    } else if (e.key === 'ArrowDown') {
-      next = Math.max(0, current - 0.05);
-      e.preventDefault();
-    } else if (e.key === 'PageUp') {
-      next = Math.min(1, current + 0.2);
-      e.preventDefault();
-    } else if (e.key === 'PageDown') {
-      next = Math.max(0, current - 0.2);
-      e.preventDefault();
-    } else if (e.key === 'Home') {
-      next = 0;
-      e.preventDefault();
-    } else if (e.key === 'End') {
-      next = 1;
-      e.preventDefault();
+  const springRightToCenter = () => {
+    if (rightPointerId !== null && rightBezel.hasPointerCapture(rightPointerId)) {
+      try { rightBezel.releasePointerCapture(rightPointerId); } catch { /* ignore */ }
     }
-    if (next !== current) {
-      callbacks.onThrottleChange(next);
+    isDraggingRight = false;
+    rightPointerId = null;
+    rightBezel.classList.remove('gimbal--active');
+
+    // Spring return to center
+    rightPuck.style.transform = `translate(0px, 0px)`;
+    callbacks.onSteerChange(0.0);
+  };
+
+  rightBezel.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    rightPointerId = e.pointerId;
+    isDraggingRight = true;
+    rightBezel.classList.add('gimbal--active');
+    try { rightBezel.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    updateSteerFromPointer(e.clientX);
+  });
+
+  rightBezel.addEventListener('pointermove', (e) => {
+    if (isDraggingRight && (rightPointerId === null || rightPointerId === e.pointerId)) {
+      updateSteerFromPointer(e.clientX);
     }
-  };
+  });
 
-  const handleKeyUp = (): void => {
-    // Dead-man safety: releasing key snaps back to 0.0
-    snapToZero();
-  };
+  rightBezel.addEventListener('pointerup', () => springRightToCenter());
+  rightBezel.addEventListener('pointercancel', () => springRightToCenter());
 
-  const handleBlur = (): void => {
-    snapToZero();
-  };
-
-  // Window-level safety hooks
-  const handleWindowPointerUp = (e: PointerEvent): void => {
-    if (isDragging) {
-      snapToZero(e.pointerId);
+  // --- Release Lock Banner Helper ---
+  const showReleaseLock = (durationMs = 250) => {
+    lockBannerEl.style.display = 'block';
+    if (releaseLockTimeout !== null) {
+      clearTimeout(releaseLockTimeout);
     }
+    releaseLockTimeout = setTimeout(() => {
+      lockBannerEl.style.display = 'none';
+      releaseLockTimeout = null;
+    }, durationMs);
   };
 
-  const handleWindowBlur = (): void => {
-    if (isDragging) {
-      snapToZero();
+  // --- Flight Timer ---
+  const startFlightTimer = () => {
+    if (timerInterval !== null) return;
+    armedStartTime = Date.now();
+    timerInterval = setInterval(() => {
+      if (armedStartTime === null) return;
+      const elapsed = Date.now() - armedStartTime;
+      const totalSec = elapsed / 1000;
+      const mins = Math.floor(totalSec / 60);
+      const secs = (totalSec % 60).toFixed(1);
+      timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(4, '0')}`;
+    }, 100);
+  };
+
+  const stopFlightTimer = () => {
+    if (timerInterval !== null) {
+      clearInterval(timerInterval);
+      timerInterval = null;
     }
+    armedStartTime = null;
   };
 
-  // Arm button click handler
-  const handleArmButtonClick = (): void => {
-    if (!isConnected) return;
+  // --- Hold-To-Arm Implementation ---
+  let armHoldTimer: ReturnType<typeof setInterval> | null = null;
+  let holdProgress = 0;
+
+  const cancelArmHold = () => {
+    if (armHoldTimer !== null) {
+      clearInterval(armHoldTimer);
+      armHoldTimer = null;
+    }
+    holdProgress = 0;
+    armProgressFill.style.width = '0%';
+  };
+
+  armButton.addEventListener('pointerdown', () => {
+    if (armButton.disabled || !isConnected) return;
+    if (currentFlightState === 'ARMED') {
+      callbacks.onArmAction(false);
+      return;
+    }
+    if (currentFlightState === 'FAILSAFE') {
+      callbacks.onArmAction(false);
+      return;
+    }
     if (currentFlightState === 'DISARMED') {
-      callbacks.onArmAction(true);
-    } else if (currentFlightState === 'ARMED') {
+      cancelArmHold();
+      holdProgress = 0;
+      armHoldTimer = setInterval(() => {
+        holdProgress += 50;
+        const pct = Math.min(100, (holdProgress / 1000) * 100);
+        armProgressFill.style.width = `${pct}%`;
+        if (holdProgress >= 1000) {
+          cancelArmHold();
+          callbacks.onArmAction(true);
+        }
+      }, 50);
+    }
+  });
+
+  armButton.addEventListener('pointerup', cancelArmHold);
+  armButton.addEventListener('pointercancel', cancelArmHold);
+  armButton.addEventListener('pointerleave', cancelArmHold);
+
+  // Standard click fallback for instant tests
+  armButton.addEventListener('click', () => {
+    if (armButton.disabled || !isConnected) return;
+    if (currentFlightState === 'ARMED') {
       callbacks.onArmAction(false);
     } else if (currentFlightState === 'FAILSAFE') {
       callbacks.onArmAction(false);
+    } else if (currentFlightState === 'DISARMED') {
+      callbacks.onArmAction(true);
     }
-  };
+  });
 
-  // Attach event listeners
-  throttleStickEl.addEventListener('pointerdown', handlePointerDown);
-  throttleStickEl.addEventListener('pointermove', handlePointerMove);
-  throttleStickEl.addEventListener('pointerup', handlePointerUp);
-  throttleStickEl.addEventListener('pointercancel', handlePointerCancel);
-  throttleStickEl.addEventListener('lostpointercapture', handleLostPointerCapture);
-  throttleStickEl.addEventListener('keydown', handleKeyDown);
-  throttleStickEl.addEventListener('keyup', handleKeyUp);
-  throttleStickEl.addEventListener('blur', handleBlur);
+  // Emergency Motor Cut button
+  cutoffButton.addEventListener('click', () => {
+    callbacks.onArmAction(false);
+    callbacks.onThrottleReset();
+    callbacks.onStickRelease();
+  });
 
-  window.addEventListener('pointerup', handleWindowPointerUp);
-  window.addEventListener('pointercancel', handleWindowPointerUp);
-  window.addEventListener('blur', handleWindowBlur);
+  // Switch SA Click (Toggle Arm/Disarm)
+  switchSa.addEventListener('click', () => {
+    if (!isConnected) return;
+    if (currentFlightState === 'ARMED') {
+      callbacks.onArmAction(false);
+    } else if (currentFlightState === 'DISARMED') {
+      callbacks.onArmAction(true);
+    } else if (currentFlightState === 'FAILSAFE') {
+      callbacks.onArmAction(false);
+    }
+  });
 
-  armButtonEl.addEventListener('click', handleArmButtonClick);
+  // Switch SD Click (Emergency Cut)
+  switchSd.addEventListener('click', () => {
+    callbacks.onArmAction(false);
+    callbacks.onThrottleReset();
+    callbacks.onStickRelease();
+  });
 
-  // Visual updater for throttle stick
-  const updateThrottleVisuals = (thr: number): void => {
-    const pct = Math.round(thr * 100);
-    throttleValueEl.textContent = `${pct}%`;
-    throttleStickEl.setAttribute('aria-valuenow', String(pct));
-    throttleStickEl.setAttribute('aria-valuetext', `${pct}%`);
-
-    // Thumb positioning with 52px thumb height:
-    // When thr = 0: bottom is 0px
-    // When thr = 1: bottom is 100% - 52px
-    // Center of thumb linearly aligns with throttle fraction
-    throttleThumbEl.style.bottom = `calc(${thr * 100}% - ${thr * 52}px)`;
-    stickFillEl.style.height = `${thr * 100}%`;
-  };
-
-  // SVG Icons for state badges
-  const icons = {
-    disarmed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="11" r="3"/></svg>`,
-    armed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`,
-    failsafe: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`,
-    disconnected: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`,
-    protoMismatch: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
-    connecting: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`,
-    armBtnDisarm: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>`,
-    armBtnArm: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`,
-    armBtnLockout: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m0 0l-6-6m6 6l6-6"/></svg>`,
-    armBtnReset: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`,
-    armBtnDisconnected: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/></svg>`,
-  };
-
-  // Main reactive update function
-  const update = (state: ControllerState): void => {
-    isConnected = state.connState === 'CONNECTED';
-    currentFlightState = state.telemetry?.st ?? 'DISARMED';
-
-    // 1. State Badge Update
-    const fwTitle = state.fw ? `Firmware: ${state.fw}` : 'Firmware: Unknown';
-    stateBadgeEl.setAttribute('title', fwTitle);
-
-    // Remove old state classes
-    stateBadgeEl.classList.remove(
-      'state-badge--disconnected',
-      'state-badge--proto-mismatch',
-      'state-badge--connecting',
-      'state-badge--disarmed',
-      'state-badge--armed',
-      'state-badge--failsafe'
-    );
-
-    let badgeText = 'DISCONNECTED';
-    let badgeIcon = icons.disconnected;
-    let badgeClass = 'state-badge--disconnected';
-
-    if (state.connState === 'DISCONNECTED') {
-      badgeText = 'DISCONNECTED';
-      badgeIcon = icons.disconnected;
-      badgeClass = 'state-badge--disconnected';
-    } else if (state.connState === 'PROTO_MISMATCH') {
-      badgeText = 'PROTO MISMATCH';
-      badgeIcon = icons.protoMismatch;
-      badgeClass = 'state-badge--proto-mismatch';
-    } else if (state.connState === 'CONNECTING') {
-      badgeText = 'CONNECTING';
-      badgeIcon = icons.connecting;
-      badgeClass = 'state-badge--connecting';
-    } else if (state.connState === 'CONNECTED') {
-      if (currentFlightState === 'ARMED') {
-        badgeText = 'ARMED';
-        badgeIcon = icons.armed;
-        badgeClass = 'state-badge--armed';
-      } else if (currentFlightState === 'FAILSAFE') {
-        badgeText = 'FAILSAFE';
-        badgeIcon = icons.failsafe;
-        badgeClass = 'state-badge--failsafe';
-      } else {
-        badgeText = 'DISARMED';
-        badgeIcon = icons.disarmed;
-        badgeClass = 'state-badge--disarmed';
+  // --- Screen Wake Lock Management ---
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockSentinel = await (navigator as unknown as { wakeLock: { request: (type: string) => Promise<unknown> } }).wakeLock.request('screen');
+      } catch {
+        // ignore
       }
     }
-
-    stateBadgeEl.classList.add(badgeClass);
-    // Strict innerHTML without interstitial whitespace ensures textContent === badgeText exactly
-    stateBadgeEl.innerHTML = `<span class="state-badge-icon" aria-hidden="true">${badgeIcon}</span><span class="state-badge-label">${badgeText}</span>`;
-
-    // 2. Link Age Readout Update
-    if (state.connState === 'CONNECTED' && state.telemetry !== null) {
-      const age = state.telemetry.age;
-      linkAgeEl.textContent = `${age} ms`;
-      if (age > 200) {
-        linkAgeEl.setAttribute('data-warning', 'true');
-      } else {
-        linkAgeEl.removeAttribute('data-warning');
-      }
-    } else {
-      linkAgeEl.textContent = '--- ms';
-      linkAgeEl.removeAttribute('data-warning');
-    }
-
-    // 3. Flap Rate Readout Update
-    if (state.connState === 'CONNECTED' && state.telemetry !== null) {
-      flapRateEl.textContent = `${state.telemetry.f.toFixed(1)} Hz`;
-    } else {
-      flapRateEl.textContent = '0.0 Hz';
-    }
-
-    // 4. Throttle Stick Position & Readout Update
-    updateThrottleVisuals(state.throttleInput);
-
-    // 5. Arm / Disarm Button Update
-    armButtonEl.classList.remove(
-      'arm-button--disconnected',
-      'arm-button--lockout',
-      'arm-button--arm',
-      'arm-button--armed',
-      'arm-button--failsafe'
-    );
-
-    let btnDisabled = true;
-    let btnText = 'DISCONNECTED';
-    let btnIcon = icons.armBtnDisconnected;
-    let btnClass = 'arm-button--disconnected';
-
-    if (state.connState !== 'CONNECTED') {
-      btnDisabled = true;
-      btnText = 'DISCONNECTED';
-      btnIcon = icons.armBtnDisconnected;
-      btnClass = 'arm-button--disconnected';
-    } else {
-      // connState === 'CONNECTED'
-      if (currentFlightState === 'DISARMED') {
-        if (state.throttleInput >= 0.05) {
-          // Safety Lockout: cannot arm drone if throttle is raised
-          btnDisabled = true;
-          btnText = 'LOWER THROTTLE TO ARM';
-          btnIcon = icons.armBtnLockout;
-          btnClass = 'arm-button--lockout';
-        } else {
-          // Safe to arm
-          btnDisabled = false;
-          btnText = 'ARM DRONE';
-          btnIcon = icons.armBtnArm;
-          btnClass = 'arm-button--arm';
-        }
-      } else if (currentFlightState === 'ARMED') {
-        btnDisabled = false;
-        btnText = 'DISARM DRONE';
-        btnIcon = icons.armBtnDisarm;
-        btnClass = 'arm-button--armed';
-      } else if (currentFlightState === 'FAILSAFE') {
-        btnDisabled = false;
-        btnText = 'RESET FAILSAFE';
-        btnIcon = icons.armBtnReset;
-        btnClass = 'arm-button--failsafe';
-      }
-    }
-
-    armButtonEl.disabled = btnDisabled;
-    armButtonEl.classList.add(btnClass);
-    // Strict innerHTML without interstitial whitespace ensures textContent === btnText exactly
-    armButtonEl.innerHTML = `<span class="arm-btn-icon" aria-hidden="true">${btnIcon}</span><span class="arm-btn-label">${btnText}</span>`;
   };
 
-  const destroy = (): void => {
-    throttleStickEl.removeEventListener('pointerdown', handlePointerDown);
-    throttleStickEl.removeEventListener('pointermove', handlePointerMove);
-    throttleStickEl.removeEventListener('pointerup', handlePointerUp);
-    throttleStickEl.removeEventListener('pointercancel', handlePointerCancel);
-    throttleStickEl.removeEventListener('lostpointercapture', handleLostPointerCapture);
-    throttleStickEl.removeEventListener('keydown', handleKeyDown);
-    throttleStickEl.removeEventListener('keyup', handleKeyUp);
-    throttleStickEl.removeEventListener('blur', handleBlur);
-
-    window.removeEventListener('pointerup', handleWindowPointerUp);
-    window.removeEventListener('pointercancel', handleWindowPointerUp);
-    window.removeEventListener('blur', handleWindowBlur);
-
-    armButtonEl.removeEventListener('click', handleArmButtonClick);
-    container.remove();
+  const releaseWakeLock = () => {
+    if (wakeLockSentinel) {
+      try {
+        (wakeLockSentinel as { release: () => Promise<void> }).release();
+      } catch {
+        // ignore
+      }
+      wakeLockSentinel = null;
+    }
   };
 
   return {
     element: container,
-    update,
-    destroy,
+
+    update(state: ControllerState): void {
+      const conn = state.connState;
+      isConnected = conn === 'CONNECTED';
+      const tel = state.telemetry;
+
+      // 1. Connection / Master State Banner
+      stateBadge.className = 'rc-state-capsule';
+      if (conn === 'DISCONNECTED') {
+        currentFlightState = 'DISCONNECTED';
+        stateBadge.classList.add('disarmed');
+        stateBadge.textContent = 'DISCONNECTED';
+        armButton.disabled = true;
+        armLabel.textContent = 'DISCONNECTED';
+        cutoffButton.style.display = 'none';
+        saHousing.classList.remove('active');
+        stopFlightTimer();
+        releaseWakeLock();
+      } else if (conn === 'CONNECTING') {
+        currentFlightState = 'DISCONNECTED';
+        stateBadge.classList.add('disarmed');
+        stateBadge.textContent = 'CONNECTING';
+        armButton.disabled = true;
+        armLabel.textContent = 'CONNECTING...';
+        cutoffButton.style.display = 'none';
+        saHousing.classList.remove('active');
+        stopFlightTimer();
+        releaseWakeLock();
+      } else if (conn === 'PROTO_MISMATCH') {
+        currentFlightState = 'PROTO_MISMATCH';
+        stateBadge.classList.add('proto-mismatch');
+        stateBadge.textContent = 'PROTO MISMATCH';
+        armButton.disabled = true;
+        armLabel.textContent = 'PROTO MISMATCH';
+        cutoffButton.style.display = 'none';
+        saHousing.classList.remove('active');
+        stopFlightTimer();
+        releaseWakeLock();
+      } else {
+        // CONNECTED: read telemetry state
+        const st: FlightState = tel?.st ?? 'DISARMED';
+        currentFlightState = st;
+
+        if (st === 'ARMED') {
+          stateBadge.classList.add('armed');
+          stateBadge.textContent = 'ARMED';
+          armButton.disabled = false;
+          armLabel.textContent = 'DISARM DRONE';
+          cutoffButton.style.display = 'flex';
+          saHousing.classList.add('active');
+          startFlightTimer();
+          requestWakeLock();
+        } else if (st === 'FAILSAFE') {
+          stateBadge.classList.add('failsafe');
+          stateBadge.textContent = 'FAILSAFE';
+          armButton.disabled = false;
+          armLabel.textContent = 'RESET FAILSAFE';
+          cutoffButton.style.display = 'none';
+          saHousing.classList.remove('active');
+          stopFlightTimer();
+          releaseWakeLock();
+        } else if (st === 'LOWBATT') {
+          stateBadge.classList.add('lowbatt');
+          stateBadge.textContent = 'LOWBATT';
+          armButton.disabled = true;
+          armLabel.textContent = 'LOW BATTERY';
+          cutoffButton.style.display = 'none';
+          saHousing.classList.remove('active');
+          stopFlightTimer();
+          releaseWakeLock();
+        } else {
+          // DISARMED
+          stateBadge.classList.add('disarmed');
+          stateBadge.textContent = 'DISARMED';
+          armButton.disabled = false;
+          armLabel.textContent = 'ARM DRONE';
+          cutoffButton.style.display = 'none';
+          saHousing.classList.remove('active');
+          stopFlightTimer();
+          releaseWakeLock();
+        }
+      }
+
+      // 2. Telemetry metrics
+      if (tel) {
+        linkAgeEl.textContent = `${tel.age} ms`;
+        if (tel.age > 200) {
+          linkAgeEl.setAttribute('data-warning', 'true');
+        } else {
+          linkAgeEl.removeAttribute('data-warning');
+        }
+
+        flapHzEl.textContent = `${tel.f.toFixed(1)} Hz`;
+        steerBiasEl.textContent = (tel.str ?? state.steerInput).toFixed(2);
+
+        if (tel.vb !== undefined) {
+          battVoltsEl.textContent = `${tel.vb.toFixed(2)}V`;
+          battVoltsEl.className = 'lcd-tx-batt';
+          if (tel.vb < 7.0) {
+            battVoltsEl.classList.add('critical');
+          } else if (tel.vb < 7.4) {
+            battVoltsEl.classList.add('warning');
+          } else {
+            battVoltsEl.classList.add('nominal');
+          }
+        }
+        if (tel.vpct !== undefined) {
+          battPctEl.textContent = `${tel.vpct}%`;
+        }
+      } else {
+        linkAgeEl.textContent = '--- ms';
+        linkAgeEl.removeAttribute('data-warning');
+        flapHzEl.textContent = '0.0 Hz';
+        steerBiasEl.textContent = '0.00';
+      }
+
+      // 3. Inputs & Readouts
+      const thrPct = Math.round(state.throttleInput * 100);
+      thrReadout.textContent = `${thrPct}%`;
+      leftBezel.setAttribute('aria-valuenow', String(thrPct));
+
+      const strVal = state.steerInput.toFixed(2);
+      strReadout.textContent = strVal;
+      rightBezel.setAttribute('aria-valuenow', String(Math.round(state.steerInput * 100)));
+
+      // 4. Live 4-Channel Servo Monitor
+      const thrChannel = Math.round(state.throttleInput * 100);
+      ch1Bar.style.width = `${thrChannel}%`;
+      ch1Val.textContent = `${thrChannel}%`;
+
+      const steerChannel = state.steerInput; // -1 .. +1
+      const steerBarWidth = Math.abs(steerChannel) * 50;
+      ch2Bar.style.width = `${steerBarWidth}%`;
+      ch2Bar.style.left = steerChannel >= 0 ? '50%' : `${50 - steerBarWidth}%`;
+      ch2Val.textContent = steerChannel.toFixed(2);
+
+      // Estimate W-L and W-R deflections for servo monitor
+      const centerAngle = 90;
+      const leftDefl = currentFlightState === 'ARMED' ? Math.round(centerAngle + state.throttleInput * 40 * (1 + state.steerInput * 0.25)) : centerAngle;
+      const rightDefl = currentFlightState === 'ARMED' ? Math.round(centerAngle + state.throttleInput * 40 * (1 - state.steerInput * 0.25)) : centerAngle;
+      ch3Bar.style.width = `${(leftDefl / 180) * 100}%`;
+      ch3Val.textContent = `${leftDefl}°`;
+      ch4Bar.style.width = `${(rightDefl / 180) * 100}%`;
+      ch4Val.textContent = `${rightDefl}°`;
+    },
+
+    destroy(): void {
+      cancelArmHold();
+      stopFlightTimer();
+      releaseWakeLock();
+      if (releaseLockTimeout !== null) {
+        clearTimeout(releaseLockTimeout);
+      }
+    },
   };
 }
+
+export default createFlightDeckUI;

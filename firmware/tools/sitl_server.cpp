@@ -26,6 +26,7 @@
 
 #include "flap_engine.h"
 #include "flight_fsm.h"
+#include "battery.h"
 #include "servo_ease.h"
 #include "servo_out.h"
 #include "link.h"
@@ -174,6 +175,8 @@ static FlightFsm g_fsm;
 static FlapEngine g_flap_engine;
 static ServoEase g_servo_ease;
 static ServoOut g_servo_out;
+static BatteryMonitor g_battery;
+static float g_sitl_vbat_input = 7.82f;
 static WsControlSource g_ws_control_source;
 
 static std::mutex g_state_mutex;
@@ -601,7 +604,7 @@ static void process_http(ClientConnection& client, const std::string& data_dir,
         }
 
         char hello_buf[64];
-        size_t hlen = serialize_hello(hello_buf, sizeof(hello_buf), "0.1.0");
+        size_t hlen = serialize_hello(hello_buf, sizeof(hello_buf), "0.2.0");
         if (hlen > 0) {
             send_ws_text(client.fd, std::string(hello_buf, hlen));
         }
@@ -609,12 +612,26 @@ static void process_http(ClientConnection& client, const std::string& data_dir,
     }
 
     // 2. GET /__sitl/state
-    if (req.method == "GET" && req.path == "/__sitl/state") {
+    if (req.method == "GET" && (req.path == "/__sitl/state" || req.path == "/__mock/state")) {
         std::string body;
         {
             std::lock_guard<std::mutex> lock(g_state_mutex);
+            uint32_t now_ms = static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - g_start_time
+                ).count()
+            );
             JsonDocument doc;
             doc["st"] = g_fsm.state_str();
+            doc["f"] = g_current_freq_hz;
+            doc["thr"] = (g_fsm.state() == FlightState::ARMED) ? g_fsm.effective_thr() : 0.0f;
+            doc["str"] = (g_fsm.state() == FlightState::ARMED) ? g_fsm.last_steering() : 0.0f;
+            doc["vb"] = std::round(g_battery.voltage() * 100.0f) / 100.0f;
+            doc["vpct"] = g_battery.percentage();
+            doc["age"] = g_fsm.age_ms(now_ms);
+            doc["lastSeq"] = g_fsm.last_seq();
+            doc["activeClients"] = (g_active_client_fd != -1) ? 1 : 0;
+            doc["releaseLockActive"] = g_fsm.is_release_locked(now_ms);
             doc["pwm_active"] = g_servo_out.is_pwm_active();
             float left_deg = (g_servo_out.last_left_deg() >= 0.0f) ? g_servo_out.last_left_deg() : g_servo_ease.current_left();
             float right_deg = (g_servo_out.last_right_deg() >= 0.0f) ? g_servo_out.last_right_deg() : g_servo_ease.current_right();
@@ -636,6 +653,65 @@ static void process_http(ClientConnection& client, const std::string& data_dir,
         {
             std::lock_guard<std::mutex> lock(g_send_mutex);
             send_all(client.fd, resp.data(), resp.size());
+        }
+        close_client = true;
+        return;
+    }
+
+    // 2b. POST /__sitl/vbat or /__mock/vbat
+    if (req.method == "POST" && (req.path == "/__sitl/vbat" || req.path == "/__mock/vbat")) {
+        float v_val = 7.82f;
+        bool parsed = false;
+
+        std::string query = req.query;
+        size_t v_pos = query.find("v=");
+        if (v_pos != std::string::npos) {
+            try {
+                v_val = std::stof(query.substr(v_pos + 2));
+                parsed = true;
+            } catch (...) {}
+        }
+
+        if (!parsed && !req.body.empty()) {
+            JsonDocument bdoc;
+            DeserializationError err = deserializeJson(bdoc, req.body);
+            if (!err && bdoc.is<JsonObject>() && bdoc["v"].is<float>()) {
+                v_val = bdoc["v"].as<float>();
+                parsed = true;
+            }
+        }
+
+        if (parsed) {
+            {
+                std::lock_guard<std::mutex> lock(g_state_mutex);
+                g_sitl_vbat_input = v_val;
+                g_battery.set_voltage(v_val);
+            }
+            std::string resp_body = "{\"ok\":true,\"vb\":" + std::to_string(v_val) + ",\"vpct\":" + std::to_string(BatteryMonitor::cell_voltage_to_percentage(v_val / 2.0f)) + "}";
+            std::string resp =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(resp_body.size()) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Connection: close\r\n\r\n" + resp_body;
+
+            {
+                std::lock_guard<std::mutex> lock(g_send_mutex);
+                send_all(client.fd, resp.data(), resp.size());
+            }
+        } else {
+            std::string err_body = "{\"error\":\"Missing or invalid v parameter\"}";
+            std::string resp =
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(err_body.size()) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Connection: close\r\n\r\n" + err_body;
+
+            {
+                std::lock_guard<std::mutex> lock(g_send_mutex);
+                send_all(client.fd, resp.data(), resp.size());
+            }
         }
         close_client = true;
         return;
@@ -776,10 +852,24 @@ static void process_websocket(ClientConnection& client, bool& close_client) {
                             g_fsm.on_ctl(now_ms, ctl.thr, ctl.str, ctl.seq);
                         }
                     }
+                } else if (ft == FrameType::STOP) {
+                    StopFrame stop_frame;
+                    if (parse_stop(payload_str, payload_len, stop_frame)) {
+                        if (g_ws_control_source.accept_stop(stop_frame.seq, now_ms)) {
+                            g_fsm.on_stop(now_ms, stop_frame.seq);
+                        }
+                    }
                 } else if (ft == FrameType::ARM) {
                     ArmFrame arm;
                     if (parse_arm(payload_str, payload_len, arm)) {
-                        g_fsm.on_arm(now_ms, arm.v);
+                        ArmResult result = g_fsm.on_arm_result(now_ms, arm.v, g_battery.is_ok());
+                        if (arm.v && !result.success) {
+                            char err_buf[80];
+                            size_t err_len = serialize_err(err_buf, sizeof(err_buf), "arm_refused", FlightFsm::to_refusal_str(result.reason));
+                            if (err_len > 0) {
+                                send_ws_text(client.fd, std::string(err_buf, err_len));
+                            }
+                        }
                     }
                 }
             }
@@ -828,17 +918,34 @@ static void simulation_task() {
         );
 
         std::string tel_frame;
+        std::string err_frame;
         int target_fd = -1;
 
         {
             std::lock_guard<std::mutex> lock(g_state_mutex);
+
+            bool was_cutoff = g_battery.is_cutoff_latched();
+            g_battery.update_pack_v(g_sitl_vbat_input, 0.010f);
+            bool newly_cutoff = !was_cutoff && g_battery.is_cutoff_latched();
+            if (newly_cutoff) {
+                g_fsm.on_battery_cutoff();
+                if (g_active_client_fd != -1) {
+                    char err_buf[80];
+                    size_t err_len = serialize_err(err_buf, sizeof(err_buf), "lowbatt", "voltage_cutoff");
+                    if (err_len > 0) {
+                        err_frame.assign(err_buf, err_len);
+                    }
+                }
+            }
+
             g_fsm.step(now_ms);
 
             FlightState st = g_fsm.state();
             bool is_armed = (st == FlightState::ARMED);
             float effective_thr = g_fsm.effective_thr();
+            float effective_str = is_armed ? g_fsm.last_steering() : 0.0f;
 
-            FlapOutput flap = g_flap_engine.update(0.010f, is_armed, effective_thr);
+            FlapOutput flap = g_flap_engine.update(0.010f, is_armed, effective_thr, effective_str);
             g_current_freq_hz = flap.freq_hz;
 
             float out_left = 90.0f;
@@ -856,7 +963,10 @@ static void simulation_task() {
                     size_t n = serialize_tel(buf, sizeof(buf),
                                              g_fsm.state_str(),
                                              g_current_freq_hz,
-                                             g_fsm.effective_thr(),
+                                             effective_thr,
+                                             effective_str,
+                                             g_battery.voltage(),
+                                             g_battery.percentage(),
                                              g_fsm.age_ms(now_ms));
                     if (n > 0) {
                         tel_frame.assign(buf, n);
@@ -864,6 +974,10 @@ static void simulation_task() {
                     }
                 }
             }
+        }
+
+        if (target_fd != -1 && !err_frame.empty()) {
+            send_ws_text(target_fd, err_frame);
         }
 
         if (target_fd != -1 && !tel_frame.empty()) {
@@ -923,8 +1037,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Initialize firmware servo layer
+    // Initialize firmware subsystems
     g_servo_out.begin();
+    g_battery.set_voltage(7.82f);
     g_start_time = std::chrono::steady_clock::now();
 
     // Create server TCP socket

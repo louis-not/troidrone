@@ -5,13 +5,14 @@
 #include <cstdint>
 #include <mutex>
 #include "flight_fsm.h"
+#include "battery.h"
 
 class NetManager {
 public:
     NetManager();
     ~NetManager();
 
-    bool begin(FlightFsm& fsm, const float& current_freq_hz, std::mutex& state_mutex);
+    bool begin(FlightFsm& fsm, BatteryMonitor& battery, const float& current_freq_hz, std::mutex& state_mutex);
     void update();
 
     uint32_t active_client_id() const;

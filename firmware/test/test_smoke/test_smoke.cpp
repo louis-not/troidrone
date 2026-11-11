@@ -43,12 +43,24 @@ void test_peripheral_pin_assignments(void) {
     TEST_ASSERT_EQUAL_UINT8(D8, PIN_LED_LOWBATT);
 }
 
+void test_s3_pin_map_values(void) {
+    TEST_ASSERT_EQUAL_UINT8(1, D0);
+    TEST_ASSERT_EQUAL_UINT8(2, D1);
+    TEST_ASSERT_EQUAL_UINT8(3, D2);
+    TEST_ASSERT_EQUAL_UINT8(4, D3);
+    TEST_ASSERT_EQUAL_UINT8(43, D6);
+    TEST_ASSERT_EQUAL_UINT8(7, D8);
+    TEST_ASSERT_EQUAL_UINT8(8, D9);
+    TEST_ASSERT_EQUAL_UINT8(9, D10);
+}
+
 int run_unity_tests(void) {
     UNITY_BEGIN();
     RUN_TEST(test_servo_pins_default);
     RUN_TEST(test_servo_pins_swap_resolution);
     RUN_TEST(test_servo_pwm_constants);
     RUN_TEST(test_peripheral_pin_assignments);
+    RUN_TEST(test_s3_pin_map_values);
     return UNITY_END();
 }
 
